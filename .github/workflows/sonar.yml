@@ -17,11 +17,22 @@ jobs:
   sonar:
     name: sonar
     runs-on: ubuntu-latest
-    # A pull request from a fork cannot read repository secrets, so the scan
-    # would fail rather than be skipped. Same-repo refs only.
+    # Two exclusions, for different reasons.
+    #
+    # Forks: a pull request from a fork cannot read repository secrets, so the
+    # scan would fail rather than be skipped.
+    #
+    # Dependabot: this job runs `cargo llvm-cov`, which compiles and executes
+    # dependency code -- build scripts and the test suite -- with SONAR_TOKEN
+    # in the environment. On a dependency-bump PR that is precisely the code
+    # under change, so a compromised crate release could read the token out of
+    # its own build script. Repository secrets were observed reaching
+    # Dependabot runs on this repo, so this is not theoretical. Analysing a
+    # dependency bump adds nothing anyway: no first-party source changes.
     if: >-
-      github.event_name == 'push' ||
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.actor != 'dependabot[bot]' &&
+      (github.event_name == 'push' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
     env:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
