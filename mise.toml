@@ -1,0 +1,15 @@
+# Versions only. Dependencies stay with cargo; commands stay in the justfile.
+# CI reads this same file via jdx/mise-action, so local and CI agree by
+# construction.
+[tools]
+rust = "1.98.0"
+just = "1.57.0"
+
+# Security tooling used by `just security`. Pinned here rather than assumed
+# present, so a clean machine and a CI runner get the same versions and a
+# tool upgrade is a reviewable change rather than a surprise.
+# cargo-audit and cargo-deny are absent from mise's registry and are installed
+# by `cargo install --locked` at pinned versions instead.
+gitleaks = "8.30.1"
+actionlint = "1.7.12"
+zizmor = "1.30.0"

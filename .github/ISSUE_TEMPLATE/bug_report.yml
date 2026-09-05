@@ -1,0 +1,42 @@
+name: Bug report
+description: Something behaved differently from what you expected.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not paste real diagnostic output.** awsdiag's output contains
+        account ids, resource ids and raw log content from a live AWS account.
+        Reduce to a synthetic example, or redact before pasting.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command you ran and what it did. Redact identifiers.
+      placeholder: |
+        awsdiag logs scan --profile p --group '/aws/lambda/my-fn' --since 2h
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "`awsdiag --version`, and your OS."
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: redaction
+    attributes:
+      label: Confirmation
+      options:
+        - label: I have removed or redacted real account ids, resource ids, hostnames and log content.
+          required: true

@@ -1,0 +1,40 @@
+# Build and tooling
+/target
+node_modules/
+test-results/
+playwright-report/
+
+# Generated reports and diagnostic output.
+#
+# awsdiag's whole output is real log content, account ids, ARNs and instance
+# ids from a live environment. Everything it can write goes here, matched
+# loosely on purpose: the failure mode is committing an incident's data to a
+# public repo, so a false positive costs nothing and a miss costs a lot.
+*.html
+!assets/*.html
+*findings*.json
+*.ndjson
+*.csv
+*.log
+
+# Credential material. The tool resolves and caches AWS credentials, and a
+# past defect wrote them to a *relative* path when HOME was unset -- plausibly
+# a checked-out repository. This is the second line of defence behind the
+# fixed code and GitHub push protection.
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+credentials
+.aws/
+
+# Design notes kept locally, not published.
+docs/superpowers/
+
+# Editor and OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp

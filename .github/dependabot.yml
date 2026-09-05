@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=https://json.schemastore.org/dependabot-2.0.json
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      aws-sdk:
+        # The aws-sdk-* crates release in lockstep and share a version of
+        # aws-smithy-*. Updating them one PR at a time produces conflicts and
+        # a lockfile that briefly mixes generations.
+        patterns:
+          - "aws-*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

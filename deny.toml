@@ -1,0 +1,43 @@
+# cargo-deny configuration. Run by `just security`.
+#
+# Without this file cargo-deny fails closed: its default licence policy allows
+# nothing, so every dependency is rejected. The allowlist below is the set of
+# licences actually present in the tree, all permissive.
+
+[graph]
+all-features = true
+
+[licenses]
+# Every licence in the dependency graph today. Adding a crate under anything
+# else is a deliberate decision, and cargo-deny will stop the build until
+# someone makes it.
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "CC0-1.0",
+    "Unicode-3.0",
+    "BlueOak-1.0.0",
+    "BSL-1.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[advisories]
+yanked = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+# crates.io only. A git or path dependency would both bypass the advisory
+# database and leak an internal URL into a public lockfile.
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

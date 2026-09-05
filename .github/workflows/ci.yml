@@ -1,0 +1,70 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+    steps:
+      # Actions pinned by commit SHA, not tag: a tag can be moved.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Do not leave the token in .git/config for later steps. Nothing
+          # here pushes, so there is no reason to keep it around.
+          persist-credentials: false
+
+      - name: Install pinned toolchain
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+
+      - name: Cache cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: setup
+        run: just setup
+
+      # Cached via ~/.cargo/bin above, so this compiles only on a cache miss.
+      # Pinned for the same reason the Actions are pinned by SHA and
+      # Playwright is pinned by version: an unpinned install resolves to
+      # whatever the registry serves that day, so a green branch could break
+      # with no repository change.
+      - name: Install security tooling
+        run: |
+          command -v cargo-audit || cargo install cargo-audit --version 0.22.2 --locked
+          command -v cargo-deny  || cargo install cargo-deny  --version 0.20.2 --locked
+
+      - name: ci
+        run: just ci
+
+      - name: Cache browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            node_modules
+          key: playwright-${{ runner.os }}-${{ hashFiles('justfile', 'playwright.config.mjs') }}
+          restore-keys: playwright-${{ runner.os }}-
+
+      # The report is a single HTML file opened from disk; a browser is the
+      # only thing that can tell us it actually works.
+      - name: browser tests
+        run: just test-browser

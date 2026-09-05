@@ -1,0 +1,90 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned toolchain
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          # No cache on the release path. A cache entry written by an earlier
+          # workflow run could otherwise reach the binary that gets published,
+          # which is the one artefact where that matters.
+          cache: false
+
+      - name: Build
+        # `just build` applies --remap-path-prefix. Release artefacts must not
+        # carry the builder's absolute paths: rustc bakes file!() paths into
+        # panic messages at compile time and `strip` does not remove them, so
+        # an unremapped binary publishes whoever built it.
+        run: just build
+
+      - name: Verify no build paths leaked into the binary
+        # A release is the one artefact that reaches strangers. Assert the
+        # property rather than trusting the flag stayed wired up.
+        shell: bash
+        run: |
+          set -euo pipefail
+          n=$(strings target/release/awsdiag | grep -c -E '/home/|/Users/|/var/home/' || true)
+          echo "absolute home paths in binary: $n"
+          test "$n" -eq 0
+
+      - name: Stage artefact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          tar -czf "dist/awsdiag-${{ matrix.target }}.tar.gz" \
+            -C target/release awsdiag
+          (cd dist && shasum -a 256 "awsdiag-${{ matrix.target }}.tar.gz" \
+            > "awsdiag-${{ matrix.target }}.tar.gz.sha256")
+
+      - name: Upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: awsdiag-${{ matrix.target }}
+          path: dist/*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artefacts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --generate-notes
