@@ -1,0 +1,87 @@
+name: sonar
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sonar-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sonar:
+    name: sonar
+    runs-on: ubuntu-latest
+    # A pull request from a fork cannot read repository secrets, so the scan
+    # would fail rather than be skipped. Same-repo refs only.
+    if: >-
+      github.event_name == 'push' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+    steps:
+      # The secrets context is not available in a job-level `if`, so the token
+      # is checked once here and every expensive step hangs off the result.
+      # Until SONAR_TOKEN is configured this job is a few seconds and a
+      # notice, rather than a red cross on every push.
+      - name: Check for SONAR_TOKEN
+        id: guard
+        run: |
+          if [ -n "${SONAR_TOKEN:-}" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::SONAR_TOKEN is not set; skipping SonarQube analysis."
+          fi
+
+      - name: Checkout
+        if: steps.guard.outputs.run == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Sonar uses history to attribute issues to authors and to work out
+          # what is "new code"; a shallow clone degrades both.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install pinned toolchain
+        if: steps.guard.outputs.run == 'true'
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+
+      - name: Cache cargo
+        if: steps.guard.outputs.run == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            target
+          key: sonar-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: sonar-${{ runner.os }}-
+
+      # `just setup` provides rustfmt and clippy -- mise ships a minimal
+      # toolchain without them, and the clippy report is half of what this
+      # job exists to produce.
+      - name: setup
+        if: steps.guard.outputs.run == 'true'
+        run: just setup
+
+      - name: Install coverage tooling
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          rustup component add llvm-tools-preview
+          command -v cargo-llvm-cov || cargo install cargo-llvm-cov --version 0.9.0 --locked
+
+      - name: Generate clippy and coverage reports
+        if: steps.guard.outputs.run == 'true'
+        run: just sonar-reports
+
+      - name: SonarQube scan
+        if: steps.guard.outputs.run == 'true'
+        uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
