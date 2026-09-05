@@ -269,6 +269,31 @@ mod tests {
     }
 
     #[test]
+    fn the_heading_carries_the_title_without_running_scripts() {
+        // The <h1> used to be empty in the source and filled by script on
+        // load, so the document had no heading text for a screen reader --
+        // or for anyone whose scripts did not run. The title is already
+        // substituted server-side for <title>; putting it in the heading too
+        // costs nothing and makes the page degrade instead of going blank.
+        let mut f = findings_with("x");
+        f.title = "Checkout latency".into();
+        let html = render(&f).unwrap();
+        assert!(
+            html.contains("<h1 id=\"title\">Checkout latency</h1>"),
+            "the heading is populated in the markup"
+        );
+        // Still escaped -- it lands in markup twice now, so both sites matter.
+        f.title = "<img src=x onerror=alert(1)>".into();
+        let html = render(&f).unwrap();
+        assert!(!html.contains("<img src=x"), "the heading is escaped too");
+        assert_eq!(
+            html.matches("&lt;img src=x").count(),
+            2,
+            "title and heading"
+        );
+    }
+
+    #[test]
     fn the_report_carries_uplot_attribution() {
         // uPlot is MIT and is compiled into every report, so its copyright
         // and permission notice have to travel with it. The banners on the
