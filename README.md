@@ -1,5 +1,10 @@
 # awsdiag
 
+[![ci](https://github.com/Ghost-Assembly/awsdiag/actions/workflows/ci.yml/badge.svg)](https://github.com/Ghost-Assembly/awsdiag/actions/workflows/ci.yml)
+[![quality gate](https://sonarcloud.io/api/project_badges/measure?project=Ghost-Assembly_awsdiag&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=Ghost-Assembly_awsdiag)
+[![coverage](https://sonarcloud.io/api/project_badges/measure?project=Ghost-Assembly_awsdiag&metric=coverage)](https://sonarcloud.io/summary/new_code?id=Ghost-Assembly_awsdiag)
+[![licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
+
 Fast, compact AWS diagnostic data acquisition — built to be driven by an AI
 agent during troubleshooting, and usable by hand.
 
@@ -315,6 +320,7 @@ Planned: in-guest collection over SSM (`host`), and the remaining services —
 
 `just ci` is what CI runs. Run it before pushing. `just security` runs
 `cargo audit`, `cargo deny check`, `gitleaks`, `actionlint` and `zizmor`.
+`just coverage` produces a browsable HTML coverage report.
 
 ## Credits
 
