@@ -84,6 +84,25 @@ export CARGO_HOME := env_var_or_default("CARGO_HOME", env_var("HOME") / ".cargo"
 remap := "--remap-path-prefix=" + CARGO_HOME + "=/cargo " + \
          "--remap-path-prefix=" + justfile_directory() + "=/awsdiag"
 
+# Coverage, as an LCOV report plus a browsable HTML one.
+coverage:
+    cargo llvm-cov --all-features --workspace --html
+    cargo llvm-cov --all-features --workspace --summary-only
+    @echo "HTML report: target/llvm-cov/html/index.html"
+
+# The two reports SonarQube Cloud consumes.
+sonar-reports:
+    # Clippy is not re-run by Sonar (sonar.rust.clippy.enabled=false). This is
+    # the same invocation `just lint` gates on, so the report and the gate can
+    # never disagree about what was checked. Without `-D warnings` it exits 0
+    # on warnings and non-zero only on a genuine compile failure, which is the
+    # behaviour wanted here.
+    mkdir -p target/sonar
+    cargo clippy --all-targets --all-features --message-format=json \
+        > target/sonar/clippy-report.json
+    cargo llvm-cov --all-features --workspace \
+        --lcov --output-path target/sonar/lcov.info
+
 # Build the release binary.
 build:
     RUSTFLAGS="{{remap}} ${RUSTFLAGS:-}" cargo build --release
