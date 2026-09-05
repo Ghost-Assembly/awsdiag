@@ -65,6 +65,13 @@ jobs:
           key: sonar-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: sonar-${{ runner.os }}-
 
+      # `just setup` provides rustfmt and clippy -- mise ships a minimal
+      # toolchain without them, and the clippy report is half of what this
+      # job exists to produce.
+      - name: setup
+        if: steps.guard.outputs.run == 'true'
+        run: just setup
+
       - name: Install coverage tooling
         if: steps.guard.outputs.run == 'true'
         run: |
