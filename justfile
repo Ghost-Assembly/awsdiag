@@ -13,6 +13,44 @@ setup:
     rustup component add rustfmt clippy
     cargo fetch
 
+# Rewrite absolute build paths out of the binary.
+#
+# rustc bakes `file!()` paths into panic messages at compile time, so a
+# release binary carries the absolute path of every crate that can panic --
+# measured at 528 strings containing the builder's home directory, which
+# `strip = true` does NOT remove. Publishing a locally built binary would
+# therefore publish the builder's username. `trim-paths` would be the tidy
+# fix but is not stabilised in Cargo 1.98, so remap explicitly. CI builds are
+# already clean (the runner's path is generic), but release artefacts must
+# not depend on where they happened to be built.
+export CARGO_HOME := env_var_or_default("CARGO_HOME", env_var("HOME") / ".cargo")
+remap := "--remap-path-prefix=" + CARGO_HOME + "=/cargo " + \
+         "--remap-path-prefix=" + justfile_directory() + "=/awsdiag"
+
+# Exported, so every cargo invocation in every recipe is remapped. Setting it
+# per-recipe meant `test-browser` -- which also builds --release -- rebuilt
+# the binary without remapping and silently undid `just build`.
+export RUSTFLAGS := remap + " " + env_var_or_default("RUSTFLAGS", "")
+
+# Coverage, as an LCOV report plus a browsable HTML one.
+coverage:
+    cargo llvm-cov --all-features --workspace --html
+    cargo llvm-cov --all-features --workspace --summary-only
+    @echo "HTML report: target/llvm-cov/html/index.html"
+
+# The two reports SonarQube Cloud consumes.
+sonar-reports:
+    # Clippy is not re-run by Sonar (sonar.rust.clippy.enabled=false). This is
+    # the same invocation `just lint` gates on, so the report and the gate can
+    # never disagree about what was checked. Without `-D warnings` it exits 0
+    # on warnings and non-zero only on a genuine compile failure, which is the
+    # behaviour wanted here.
+    mkdir -p target/sonar
+    cargo clippy --all-targets --all-features --message-format=json \
+        > target/sonar/clippy-report.json
+    cargo llvm-cov --all-features --workspace \
+        --lcov --output-path target/sonar/lcov.info
+
 # Format sources in place.
 fmt:
     cargo fmt --all
@@ -70,42 +108,9 @@ security:
     actionlint
     zizmor --no-progress .github/workflows/
 
-# Rewrite absolute build paths out of the binary.
-#
-# rustc bakes `file!()` paths into panic messages at compile time, so a
-# release binary carries the absolute path of every crate that can panic --
-# measured at 528 strings containing the builder's home directory, which
-# `strip = true` does NOT remove. Publishing a locally built binary would
-# therefore publish the builder's username. `trim-paths` would be the tidy
-# fix but is not stabilised in Cargo 1.98, so remap explicitly. CI builds are
-# already clean (the runner's path is generic), but release artefacts must
-# not depend on where they happened to be built.
-export CARGO_HOME := env_var_or_default("CARGO_HOME", env_var("HOME") / ".cargo")
-remap := "--remap-path-prefix=" + CARGO_HOME + "=/cargo " + \
-         "--remap-path-prefix=" + justfile_directory() + "=/awsdiag"
-
-# Coverage, as an LCOV report plus a browsable HTML one.
-coverage:
-    cargo llvm-cov --all-features --workspace --html
-    cargo llvm-cov --all-features --workspace --summary-only
-    @echo "HTML report: target/llvm-cov/html/index.html"
-
-# The two reports SonarQube Cloud consumes.
-sonar-reports:
-    # Clippy is not re-run by Sonar (sonar.rust.clippy.enabled=false). This is
-    # the same invocation `just lint` gates on, so the report and the gate can
-    # never disagree about what was checked. Without `-D warnings` it exits 0
-    # on warnings and non-zero only on a genuine compile failure, which is the
-    # behaviour wanted here.
-    mkdir -p target/sonar
-    cargo clippy --all-targets --all-features --message-format=json \
-        > target/sonar/clippy-report.json
-    cargo llvm-cov --all-features --workspace \
-        --lcov --output-path target/sonar/lcov.info
-
 # Build the release binary.
 build:
-    RUSTFLAGS="{{remap}} ${RUSTFLAGS:-}" cargo build --release
+    cargo build --release
 
 # Run the binary; pass arguments after `--`, e.g. `just run -- whoami`.
 run *ARGS:
@@ -117,7 +122,7 @@ clean:
 
 # Everything CI runs. The required status check is named `ci`.
 ci: lint test security
-    RUSTFLAGS="{{remap}} ${RUSTFLAGS:-}" cargo build --release
+    cargo build --release
 
 # Everything, including the browser suite. Separate from `ci` because it
 # downloads ~250 MB of browsers; CI runs it as its own cached step.

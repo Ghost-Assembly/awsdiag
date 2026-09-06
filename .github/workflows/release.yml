@@ -59,11 +59,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Name the artefact from the triple the compiler actually built for,
+          # and fail if it disagrees with the matrix label. Naming it from the
+          # label alone would quietly ship a mislabelled binary if a runner
+          # image changed architecture.
+          triple=$(rustc -vV | sed -n 's/^host: //p')
+          if [ "$triple" != "${{ matrix.target }}" ]; then
+            echo "::error::built for $triple, expected ${{ matrix.target }}"
+            exit 1
+          fi
           mkdir -p dist
-          tar -czf "dist/awsdiag-${{ matrix.target }}.tar.gz" \
-            -C target/release awsdiag
-          (cd dist && shasum -a 256 "awsdiag-${{ matrix.target }}.tar.gz" \
-            > "awsdiag-${{ matrix.target }}.tar.gz.sha256")
+          name="awsdiag-$triple.tar.gz"
+          tar -czf "dist/$name" -C target/release awsdiag
+          # sha256sum is coreutils (Linux); shasum is the macOS spelling.
+          cd dist
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$name" > "$name.sha256"
+          else
+            shasum -a 256 "$name" > "$name.sha256"
+          fi
+          cat "$name.sha256"
 
       - name: Upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
