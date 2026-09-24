@@ -6,13 +6,13 @@ import path from 'node:path';
 
 const REPORT = pathToFileURL(path.resolve(process.env.PROBE_REPORT_PATH)).href;
 
-const markerColours = () => [...document.querySelectorAll('.chart')].map(c =>
+const markerColors = () => [...document.querySelectorAll('.chart')].map(c =>
   Object.fromEntries([...c.querySelectorAll('.u-legend tr')].slice(1).map(tr => [
     tr.textContent.trim().split(':')[0].replace(/-+$/, ''),
     getComputedStyle(tr.querySelector('.u-marker')).borderColor,
   ])));
 
-test('a series is the same colour in every chart and on its pill', async ({ page }) => {
+test('a series is the same color in every chart and on its pill', async ({ page }) => {
   // Colors were assigned from a running counter per chart while the pills
   // indexed a de-duplicated list, so the same host was blue in one chart and
   // green in the next while its pill matched only the first. In a report
@@ -20,24 +20,24 @@ test('a series is the same colour in every chart and on its pill', async ({ page
   await page.goto(REPORT);
   await page.waitForSelector('.chart canvas');
 
-  const charts = await page.evaluate(markerColours);
+  const charts = await page.evaluate(markerColors);
   const withWebA = charts.filter(c => c['web-a']);
   expect(withWebA.length).toBeGreaterThan(1);
   const distinct = new Set(withWebA.map(c => c['web-a']));
   expect(distinct.size).toBe(1);
 
   const pill = page.getByRole('button', { name: 'web-a' });
-  const pillColour = await pill.evaluate(b => getComputedStyle(b).backgroundColor);
-  expect(pillColour).toBe([...distinct][0]);
+  const pillColor = await pill.evaluate(b => getComputedStyle(b).backgroundColor);
+  expect(pillColor).toBe([...distinct][0]);
 });
 
-test('two series never share a colour', async ({ page }) => {
+test('two series never share a color', async ({ page }) => {
   await page.goto(REPORT);
   await page.waitForSelector('.chart canvas');
-  const charts = await page.evaluate(markerColours);
+  const charts = await page.evaluate(markerColors);
   const merged = Object.assign({}, ...charts);
-  const colours = Object.values(merged);
-  expect(new Set(colours).size).toBe(colours.length);
+  const colors = Object.values(merged);
+  expect(new Set(colors).size).toBe(colors.length);
 });
 
 test('an unparsable timestamp is reported, not silently blank', async ({ page }) => {

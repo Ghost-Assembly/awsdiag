@@ -594,7 +594,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unrecognised_identifier_is_left_alone_by_the_tokenizer() {
+    fn an_unrecognized_identifier_is_left_alone_by_the_tokenizer() {
         // Host names have no format -- `db-master`, `srv12345`, `web01-a98a`
         // are all plausible -- so there is no shape to match on, and guessing
         // at one masks ordinary words. Lines that differ only by such a token

@@ -152,7 +152,7 @@ mod tests {
     }
 
     #[test]
-    fn a_misspelt_key_is_reported_rather_than_ignored() {
+    fn a_misspelled_key_is_reported_rather_than_ignored() {
         let e = parse(r#"{"title":"x","clusterz":[]}"#, "f.json").unwrap_err();
         assert!(e.to_string().contains("clusterz"), "{e}");
     }

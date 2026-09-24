@@ -305,7 +305,7 @@ mod tests {
     }
 
     #[test]
-    fn expired_sso_is_recognised_from_a_nested_source() {
+    fn expired_sso_is_recognized_from_a_nested_source() {
         // The useful marker is never in the outermost message, so a
         // non-recursive check would miss every real expiry.
         let e = err(
@@ -319,7 +319,7 @@ mod tests {
     }
 
     #[test]
-    fn expired_token_service_error_is_recognised() {
+    fn expired_token_service_error_is_recognized() {
         let e = err(
             "service error",
             Some("ExpiredToken: The security token included in the request is expired"),
@@ -342,7 +342,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unrecognised_error_keeps_its_message_and_is_not_called_auth() {
+    fn an_unrecognized_error_keeps_its_message_and_is_not_called_auth() {
         // Mislabeling a throttle as expired credentials sends the caller to
         // `aws sso login`, which wastes time and does not help.
         let e = err(
@@ -362,7 +362,7 @@ mod tests {
     }
 
     #[test]
-    fn config_path_honours_the_environment_override() {
+    fn config_path_honors_the_environment_override() {
         // Uses a distinct value so it cannot pass by coincidence.
         let prev = std::env::var("AWS_CONFIG_FILE").ok();
         unsafe { std::env::set_var("AWS_CONFIG_FILE", "/tmp/awsdiag-test-config") };

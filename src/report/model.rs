@@ -159,7 +159,7 @@ mod tests {
     }
 
     #[test]
-    fn a_misspelt_field_is_rejected_rather_than_silently_dropped() {
+    fn a_misspelled_field_is_rejected_rather_than_silently_dropped() {
         // Without deny_unknown_fields a typo produces a report missing a
         // whole panel, with no indication anything went wrong.
         let e = serde_json::from_str::<Findings>(r#"{"title":"x","clusterz":[]}"#).unwrap_err();

@@ -362,7 +362,7 @@ pub async fn top(
     }
 
     progress.phase("ranking");
-    let ranked = align::rank(series.iter().map(align::summarise).collect(), by);
+    let ranked = align::rank(series.iter().map(align::summarize).collect(), by);
     let reporting = ranked.iter().filter(|s| s.datapoints > 0).count();
     let rows: Vec<align::Summary> = ranked.into_iter().take(count).collect();
     progress.finish(format!(
@@ -691,7 +691,7 @@ mod tests {
     }
 
     #[test]
-    fn a_single_series_is_labelled_by_its_metric() {
+    fn a_single_series_is_labeled_by_its_metric() {
         assert_eq!(
             label_series(&specs(&["AWS/Lambda/Errors:Sum"])),
             vec!["Errors"]

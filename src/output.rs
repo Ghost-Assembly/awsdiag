@@ -235,7 +235,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_control_sequences_in_log_content_are_neutralised() {
+    fn terminal_control_sequences_in_log_content_are_neutralized() {
         // Log content is written by whatever produces the logs. Rendered raw
         // to a TTY, `ESC[2K` and `ESC[A` erase and overwrite lines already on
         // screen -- so an operator reading `logs tail` mid-incident can be
@@ -254,7 +254,7 @@ mod tests {
     }
 
     #[test]
-    fn other_control_bytes_are_neutralised_too() {
+    fn other_control_bytes_are_neutralized_too() {
         // Backspace, NUL, and the C1 range are all interpreted by terminals.
         for c in ['\u{0}', '\u{8}', '\u{7}', '\u{9b}'] {
             let out = table(&[json!({ "m": format!("a{c}b") })]);

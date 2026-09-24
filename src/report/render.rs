@@ -307,6 +307,6 @@ mod tests {
             2,
             "one banner from the inlined JS, one from the inlined CSS"
         );
-        assert!(html.contains("MIT License"), "the licence is named");
+        assert!(html.contains("MIT License"), "the license is named");
     }
 }

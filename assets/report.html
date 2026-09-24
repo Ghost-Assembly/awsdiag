@@ -132,7 +132,7 @@ footer{margin-top:40px;color:var(--muted);font-size:12px;border-top:1px solid va
   // Read on demand rather than frozen at load: if the OS theme flips, every
   // CSS color changes but a cached palette would leave canvas strokes and
   // pill backgrounds on the old one.
-  const colourAt = i => token(PALETTE[i % PALETTE.length]);
+  const colorAt = i => token(PALETTE[i % PALETTE.length]);
 
   function panel(parent) { const s = el("section", "panel"); parent.append(s); return s; }
   function heading(text) { const h = el("h2", null, text); main.append(h); return h; }
@@ -206,7 +206,7 @@ footer{margin-top:40px;color:var(--muted);font-size:12px;border-top:1px solid va
     // color in each chart while its pill matched only the first -- actively
     // misleading in a report whose purpose is comparing across panels.
     const names = [...new Set(charts.flatMap(c => c.series || []))];
-    const colourFor = name => colourAt(names.indexOf(name));
+    const colorFor = name => colorAt(names.indexOf(name));
 
     // Iterate everything declared, in the author's order. A separate pass for
     // empty charts put a placeholder ahead of charts declared before it, and
@@ -243,7 +243,7 @@ footer{margin-top:40px;color:var(--muted);font-size:12px;border-top:1px solid va
       });
 
       const seriesOpts = [{}].concat((c.series || []).map(name => ({
-        label: name, stroke: colourFor(name), width: 1.5, spanGaps: false,
+        label: name, stroke: colorFor(name), width: 1.5, spanGaps: false,
         points: { show: false }
       })));
 
@@ -303,14 +303,14 @@ footer{margin-top:40px;color:var(--muted);font-size:12px;border-top:1px solid va
         const b = el("button", "pill", name);
         b.type = "button";
         b.setAttribute("aria-pressed", "true");
-        const colour = colourFor(name);
-        b.style.background = colour;
-        b.style.borderColor = colour;
+        const color = colorFor(name);
+        b.style.background = color;
+        b.style.borderColor = color;
         b.style.color = token("--panel");
         b.addEventListener("click", () => {
           const on = b.getAttribute("aria-pressed") !== "true";
           b.setAttribute("aria-pressed", String(on));
-          b.style.background = on ? colour : "transparent";
+          b.style.background = on ? color : "transparent";
           b.style.color = on ? token("--panel") : token("--muted");
           // Keyed on the plot's own series, not on a positional index into
           // the declared list -- those diverge as soon as one chart is empty

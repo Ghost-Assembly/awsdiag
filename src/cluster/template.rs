@@ -427,7 +427,7 @@ mod tests {
     }
 
     #[test]
-    fn rates_are_normalised_by_duration_not_compared_raw() {
+    fn rates_are_normalized_by_duration_not_compared_raw() {
         // 24 events over 24h is 1/hour. 10 in one hour is 10x that: spiking.
         // Comparing raw counts (10 vs 24) would call this a *decrease*.
         assert_eq!(classify(10, Some(24)), Status::Spiking);

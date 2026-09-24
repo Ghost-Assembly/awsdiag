@@ -154,12 +154,12 @@ impl Task {
 
 /// `NO_COLOR` is honored for color only. It asks for no color, not for no
 /// progress, so the bars still draw — in plain text.
-fn colour() -> bool {
+fn color() -> bool {
     std::env::var("NO_COLOR").is_err_and(|_| true)
 }
 
 fn spinner_style() -> ProgressStyle {
-    let t = if colour() {
+    let t = if color() {
         "{spinner:.cyan} {msg}"
     } else {
         "{spinner} {msg}"
@@ -170,7 +170,7 @@ fn spinner_style() -> ProgressStyle {
 }
 
 fn task_style() -> ProgressStyle {
-    let t = if colour() {
+    let t = if color() {
         "  {spinner:.dim} {msg:.dim}"
     } else {
         "  {spinner} {msg}"
@@ -179,7 +179,7 @@ fn task_style() -> ProgressStyle {
 }
 
 fn done_style() -> ProgressStyle {
-    let t = if colour() {
+    let t = if color() {
         "  {prefix:.green}{msg:.dim}"
     } else {
         "  {prefix}{msg}"
@@ -190,7 +190,7 @@ fn done_style() -> ProgressStyle {
 }
 
 fn failed_style() -> ProgressStyle {
-    let t = if colour() {
+    let t = if color() {
         "  {prefix:.red}{msg}"
     } else {
         "  {prefix}{msg}"
