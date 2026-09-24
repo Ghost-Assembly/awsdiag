@@ -20,7 +20,7 @@
 //!
 //! Every failure path degrades to "no cache": a corrupt, unreadable or
 //! truncated entry causes a normal credential fetch rather than an error. A
-//! cache is an optimisation, and it must never be the reason a diagnostic
+//! cache is an optimization, and it must never be the reason a diagnostic
 //! command fails during an incident.
 
 use aws_credential_types::Credentials;

@@ -20,7 +20,7 @@ pub const EXAMPLE: &str = r##"{
   ],
   "charts": [
     {
-      "title": "CPU utilisation",
+      "title": "CPU utilization",
       "unit": "%",
       "series": ["web-a", "web-b"],
       "rows": [

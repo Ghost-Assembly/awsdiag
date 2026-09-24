@@ -27,7 +27,7 @@ jobs:
     # in the environment. On a dependency-bump PR that is precisely the code
     # under change, so a compromised crate release could read the token out of
     # its own build script. Repository secrets were observed reaching
-    # Dependabot runs on this repo, so this is not theoretical. Analysing a
+    # Dependabot runs on this repo, so this is not theoretical. Analyzing a
     # dependency bump adds nothing anyway: no first-party source changes.
     if: >-
       github.actor != 'dependabot[bot]' &&

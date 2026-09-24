@@ -1,13 +1,13 @@
 # Third-party notices
 
 `awsdiag` embeds the following third-party software in the binary and in every
-HTML report it generates. Each is reproduced under its own licence, and the
-full licence text is included alongside the vendored files.
+HTML report it generates. Each is reproduced under its own license, and the
+full license text is included alongside the vendored files.
 
 ## uPlot
 
 - **Version:** 1.6.32
-- **Licence:** MIT
+- **License:** MIT
 - **Copyright:** Copyright (c) 2022 Leon Sorokin
 - **Upstream:** https://github.com/leeoniya/uPlot
 - **Full text:** [`assets/vendor/LICENSE.uPlot`](assets/vendor/LICENSE.uPlot)
@@ -25,7 +25,7 @@ asserting this, so attribution cannot be dropped by a future refactor.
 
 The crates listed in `Cargo.lock` are not vendored — Cargo fetches them at
 build time and they are statically linked into the binary. All are under
-permissive licences (predominantly `MIT OR Apache-2.0`, plus `Unicode-3.0`,
+permissive licenses (predominantly `MIT OR Apache-2.0`, plus `Unicode-3.0`,
 `ISC`, `BSD-3-Clause`, `Zlib`, `0BSD`, `BlueOak-1.0.0` and `CC0-1.0`). The
 allowlist is enforced by `cargo deny check licenses`, configured in
 `deny.toml` and run by `just security`.

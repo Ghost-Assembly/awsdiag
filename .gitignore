@@ -19,7 +19,7 @@ playwright-report/
 
 # Credential material. The tool resolves and caches AWS credentials, and a
 # past defect wrote them to a *relative* path when HOME was unset -- plausibly
-# a checked-out repository. This is the second line of defence behind the
+# a checked-out repository. This is the second line of defense behind the
 # fixed code and GitHub push protection.
 .env
 .env.*

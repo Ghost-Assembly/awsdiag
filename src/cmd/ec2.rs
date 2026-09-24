@@ -366,7 +366,7 @@ pub async fn health(
     let mut page = 0usize;
 
     // DescribeInstanceStatus pages at 1000. A single un-paginated call in a
-    // fleet larger than that returned a page-one view labelled complete, and
+    // fleet larger than that returned a page-one view labeled complete, and
     // the worst-first sort could only rank what had been fetched -- an
     // impaired instance on page two was invisible.
     loop {

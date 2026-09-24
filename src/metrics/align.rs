@@ -386,7 +386,7 @@ mod tests {
         assert!(align(&[series("a", &[])], t(0), t(0), 60).rows.is_empty());
     }
 
-    // ---- summarising and ranking -----------------------------------------
+    // ---- summarizing and ranking -----------------------------------------
 
     #[test]
     fn a_summary_reports_the_shape_of_a_series() {

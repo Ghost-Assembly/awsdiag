@@ -79,7 +79,7 @@ pub struct Cluster {
     pub exemplar: Exemplar,
 }
 
-/// How many streams to name per cluster before summarising the rest.
+/// How many streams to name per cluster before summarizing the rest.
 const MAX_STREAMS: usize = 10;
 
 /// A cluster must exceed the baseline rate by this factor to count as
@@ -208,8 +208,8 @@ fn build(
 
 /// Classify each cluster against counts from a baseline period.
 ///
-/// Rates are normalised by duration, so a 1-hour window compares correctly
-/// against a 24-hour baseline. Without that normalisation every cluster in a
+/// Rates are normalized by duration, so a 1-hour window compares correctly
+/// against a 24-hour baseline. Without that normalization every cluster in a
 /// short window would look like it had collapsed.
 pub fn apply_baseline(
     clusters: &mut [Cluster],

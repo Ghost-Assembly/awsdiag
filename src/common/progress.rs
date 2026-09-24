@@ -12,7 +12,7 @@
 //!
 //! `auto` (the default) delegates to indicatif, which hides itself when
 //! stderr is not user-attended or `TERM` is unset or `dumb`. That is exactly
-//! the wanted behaviour — piping or redirecting produces no escape codes —
+//! the wanted behavior — piping or redirecting produces no escape codes —
 //! and it is the library's own safeguard rather than a reimplementation.
 //!
 //! `always` bypasses that check, which is what lets the stdout-invariance
@@ -152,7 +152,7 @@ impl Task {
     }
 }
 
-/// `NO_COLOR` is honoured for colour only. It asks for no colour, not for no
+/// `NO_COLOR` is honored for color only. It asks for no color, not for no
 /// progress, so the bars still draw — in plain text.
 fn colour() -> bool {
     std::env::var("NO_COLOR").is_err_and(|_| true)

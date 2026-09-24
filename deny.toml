@@ -1,14 +1,14 @@
 # cargo-deny configuration. Run by `just security`.
 #
-# Without this file cargo-deny fails closed: its default licence policy allows
+# Without this file cargo-deny fails closed: its default license policy allows
 # nothing, so every dependency is rejected. The allowlist below is the set of
-# licences actually present in the tree, all permissive.
+# licenses actually present in the tree, all permissive.
 
 [graph]
 all-features = true
 
 [licenses]
-# Every licence in the dependency graph today. Adding a crate under anything
+# Every license in the dependency graph today. Adding a crate under anything
 # else is a deliberate decision, and cargo-deny will stop the build until
 # someone makes it.
 allow = [

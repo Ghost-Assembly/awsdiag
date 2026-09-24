@@ -35,18 +35,18 @@ jobs:
         with:
           # No cache on the release path. A cache entry written by an earlier
           # workflow run could otherwise reach the binary that gets published,
-          # which is the one artefact where that matters.
+          # which is the one artifact where that matters.
           cache: false
 
       - name: Build
-        # `just build` applies --remap-path-prefix. Release artefacts must not
+        # `just build` applies --remap-path-prefix. Release artifacts must not
         # carry the builder's absolute paths: rustc bakes file!() paths into
         # panic messages at compile time and `strip` does not remove them, so
         # an unremapped binary publishes whoever built it.
         run: just build
 
       - name: Verify no build paths leaked into the binary
-        # A release is the one artefact that reaches strangers. Assert the
+        # A release is the one artifact that reaches strangers. Assert the
         # property rather than trusting the flag stayed wired up.
         shell: bash
         run: |
@@ -55,13 +55,13 @@ jobs:
           echo "absolute home paths in binary: $n"
           test "$n" -eq 0
 
-      - name: Stage artefact
+      - name: Stage artifact
         shell: bash
         run: |
           set -euo pipefail
-          # Name the artefact from the triple the compiler actually built for,
+          # Name the artifact from the triple the compiler actually built for,
           # and fail if it disagrees with the matrix label. Naming it from the
-          # label alone would quietly ship a mislabelled binary if a runner
+          # label alone would quietly ship a mislabeled binary if a runner
           # image changed architecture.
           triple=$(rustc -vV | sed -n 's/^host: //p')
           if [ "$triple" != "${{ matrix.target }}" ]; then
@@ -92,7 +92,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download artefacts
+      - name: Download artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: dist

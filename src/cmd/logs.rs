@@ -174,7 +174,7 @@ impl ScanResult {
     ///
     /// CloudWatch returns events ascending from the window start, so hitting
     /// a limit yields the *oldest* slice of the window, not the newest. A
-    /// caller that assumed otherwise would analyse stale data and conclude
+    /// caller that assumed otherwise would analyze stale data and conclude
     /// the wrong thing; reporting real coverage makes the shortfall visible.
     pub fn coverage(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
         let first = self.events.iter().map(|e| e.ts).min()?;
@@ -493,7 +493,7 @@ mod tests {
 
     #[test]
     fn a_truncated_scan_says_the_newest_events_are_missing() {
-        // The dangerous failure is silent: analysing the oldest slice of a
+        // The dangerous failure is silent: analyzing the oldest slice of a
         // wide window and reporting it as current.
         let w = Window {
             since: at(0),

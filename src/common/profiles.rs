@@ -68,7 +68,7 @@ pub fn resolve<'a>(pattern: &str, available: &'a [String]) -> Result<Vec<&'a str
 /// Whether `profile` authenticates via AWS SSO.
 ///
 /// Decides which recovery command an auth failure suggests. Keys are read
-/// from the profile's own section only — `sso_session` in a neighbouring
+/// from the profile's own section only — `sso_session` in a neighboring
 /// profile says nothing about this one.
 pub fn is_sso(config: &str, profile: &str) -> bool {
     let wanted: Vec<String> = if profile == "default" {
@@ -94,7 +94,7 @@ pub fn is_sso(config: &str, profile: &str) -> bool {
     false
 }
 
-/// The body of one profile's section, normalised.
+/// The body of one profile's section, normalized.
 ///
 /// Used to key the credential cache. Everything that decides *which*
 /// principal a profile resolves to lives here — `sso_session`,

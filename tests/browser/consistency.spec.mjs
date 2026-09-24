@@ -13,7 +13,7 @@ const markerColours = () => [...document.querySelectorAll('.chart')].map(c =>
   ])));
 
 test('a series is the same colour in every chart and on its pill', async ({ page }) => {
-  // Colours were assigned from a running counter per chart while the pills
+  // Colors were assigned from a running counter per chart while the pills
   // indexed a de-duplicated list, so the same host was blue in one chart and
   // green in the next while its pill matched only the first. In a report
   // whose purpose is comparing hosts across panels, that misleads actively.

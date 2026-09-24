@@ -41,7 +41,7 @@ pub struct Window {
 }
 
 /// A narrative section. `severity` only tints the heading; it carries no
-/// behaviour, so an unfamiliar value degrades to plain rather than failing.
+/// behavior, so an unfamiliar value degrades to plain rather than failing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Section {

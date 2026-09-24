@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use std::time::SystemTime;
 
-/// Location of the AWS config file, honouring `AWS_CONFIG_FILE`.
+/// Location of the AWS config file, honoring `AWS_CONFIG_FILE`.
 pub fn config_path() -> PathBuf {
     if let Ok(p) = std::env::var("AWS_CONFIG_FILE") {
         return PathBuf::from(p);
@@ -115,7 +115,7 @@ pub async fn config_for(profile: &str, region: Option<&str>) -> SdkConfig {
 
 /// Connect timeout, deliberately more generous than the SDK default.
 ///
-/// The default (~3.1s) is tuned for a datacentre. Measured from a VPN'd WSL2
+/// The default (~3.1s) is tuned for a datacenter. Measured from a VPN'd WSL2
 /// host it produced repeated `HTTP connect timeout occurred after 3.1s`
 /// failures on a link that was working fine — a diagnostic tool that gives up
 /// on a slow network is useless precisely when the network is the problem.
@@ -147,9 +147,9 @@ fn retries() -> RetryConfig {
 ///
 /// The SDK does not expose a single typed variant for "credentials are stale",
 /// so this walks the source chain for the markers AWS actually emits. It is a
-/// heuristic, and deliberately conservative: anything unrecognised stays a
+/// heuristic, and deliberately conservative: anything unrecognized stays a
 /// generic `Aws` error with the original message intact, rather than being
-/// mislabelled as an auth problem and sending the caller to re-login for
+/// mislabeled as an auth problem and sending the caller to re-login for
 /// something a login will not fix.
 pub fn map_sdk_error<E: std::error::Error + 'static>(
     err: E,
@@ -343,7 +343,7 @@ mod tests {
 
     #[test]
     fn an_unrecognised_error_keeps_its_message_and_is_not_called_auth() {
-        // Mislabelling a throttle as expired credentials sends the caller to
+        // Mislabeling a throttle as expired credentials sends the caller to
         // `aws sso login`, which wastes time and does not help.
         let e = err(
             "dispatch failure",

@@ -616,7 +616,7 @@ mod tests {
 
     #[test]
     fn labels_use_the_dimension_that_actually_differs() {
-        // Observed live: both of these labelled `CallCount API`, because the
+        // Observed live: both of these labeled `CallCount API`, because the
         // last dimension is shared and only `Resource` tells them apart.
         let s = specs(&[
             "AWS/Usage/CallCount:Sum,Class=None,Resource=GetMetricData,Service=CloudWatch,Type=API",

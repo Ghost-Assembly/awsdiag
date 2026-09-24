@@ -7,7 +7,7 @@
 <style>__UPLOT_CSS__</style>
 <style>
 /* Tokens are defined on :root for light and overridden for dark, so no
-   colour has its only definition inside a media query. */
+   color has its only definition inside a media query. */
 :root{
   --bg:#fbfbfa; --panel:#fff; --ink:#1a1a19; --muted:#6b6b68; --line:#e3e3df;
   --accent:#2f6f9f; --warn:#b3541e; --bad:#a32b2b; --good:#2d7a4f;
@@ -130,7 +130,7 @@ footer{margin-top:40px;color:var(--muted);font-size:12px;border-top:1px solid va
     getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   const PALETTE = ["--s1","--s2","--s3","--s4","--s5","--s6","--s7","--s8"];
   // Read on demand rather than frozen at load: if the OS theme flips, every
-  // CSS colour changes but a cached palette would leave canvas strokes and
+  // CSS color changes but a cached palette would leave canvas strokes and
   // pill backgrounds on the old one.
   const colourAt = i => token(PALETTE[i % PALETTE.length]);
 
@@ -201,9 +201,9 @@ footer{margin-top:40px;color:var(--muted);font-size:12px;border-top:1px solid va
     };
 
     const plots = [];
-    // One colour per series *name*, shared by every chart and by the pill.
+    // One color per series *name*, shared by every chart and by the pill.
     // Assigning from a running counter gave the same resource a different
-    // colour in each chart while its pill matched only the first -- actively
+    // color in each chart while its pill matched only the first -- actively
     // misleading in a report whose purpose is comparing across panels.
     const names = [...new Set(charts.flatMap(c => c.series || []))];
     const colourFor = name => colourAt(names.indexOf(name));
