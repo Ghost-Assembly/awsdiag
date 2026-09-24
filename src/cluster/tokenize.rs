@@ -10,7 +10,7 @@
 //! the difference that matters. Mask too little and a single failure shatters
 //! into thousands of clusters, which is just the raw log with extra steps.
 //!
-//! The rules below are therefore deliberately *specific* — each recognises a
+//! The rules below are therefore deliberately *specific* — each recognizes a
 //! shape that is unambiguously an identifier, a quantity or an address —
 //! rather than one broad "looks variable" heuristic. Where a rule risks
 //! catching a real word, the tests pin the boundary explicitly.
@@ -22,7 +22,7 @@
 pub const MASK: &str = "<*>";
 
 /// Beyond this many tokens a line is truncated. Log lines carrying a whole
-/// serialised payload would otherwise produce enormous templates that are
+/// serialized payload would otherwise produce enormous templates that are
 /// slow to compare and useless to read.
 const MAX_TOKENS: usize = 60;
 
@@ -227,7 +227,7 @@ fn is_identity_key(key: &str) -> bool {
 const STRUCTURAL: [char; 11] = ['{', '}', '[', ']', ',', ':', '=', '"', '<', '>', '\''];
 
 /// Split an unparsed payload on its structural punctuation and mask the
-/// variable pieces, keeping the delimiters so the shape stays recognisable.
+/// variable pieces, keeping the delimiters so the shape stays recognizable.
 ///
 /// Returns `None` when the token is too short or too plain to be a payload,
 /// leaving ordinary words untouched.
@@ -594,7 +594,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unrecognised_identifier_is_left_alone_by_the_tokenizer() {
+    fn an_unrecognized_identifier_is_left_alone_by_the_tokenizer() {
         // Host names have no format -- `db-master`, `srv12345`, `web01-a98a`
         // are all plausible -- so there is no shape to match on, and guessing
         // at one masks ordinary words. Lines that differ only by such a token

@@ -3,12 +3,12 @@
 [![ci](https://github.com/Ghost-Assembly/awsdiag/actions/workflows/ci.yml/badge.svg)](https://github.com/Ghost-Assembly/awsdiag/actions/workflows/ci.yml)
 [![quality gate](https://sonarcloud.io/api/project_badges/measure?project=Ghost-Assembly_awsdiag&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=Ghost-Assembly_awsdiag)
 [![coverage](https://sonarcloud.io/api/project_badges/measure?project=Ghost-Assembly_awsdiag&metric=coverage)](https://sonarcloud.io/summary/new_code?id=Ghost-Assembly_awsdiag)
-[![licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Fast, compact AWS diagnostic data acquisition — built to be driven by an AI
 agent during troubleshooting, and usable by hand.
 
-It acquires and *shapes* data. It does not analyse. The caller reasons over
+It acquires and *shapes* data. It does not analyze. The caller reasons over
 the output and writes the report; `awsdiag report` renders that report into a
 single self-contained HTML file.
 
@@ -117,8 +117,8 @@ does not have to invent charts.
 Charts share one x-axis with a **synced cursor**: hover anywhere and every
 chart shows its value at that instant. Brush-drag zooms all of them together,
 series toggle across every chart at once, and `events` draw vertical markers
-**labelled on the line itself** so a spike lines up with the deploy that
-caused it. A series keeps one colour across every chart and its toggle, which
+**labeled on the line itself** so a spike lines up with the deploy that
+caused it. A series keeps one color across every chart and its toggle, which
 is what makes comparing panels possible. **Axes are in
 UTC**, matching the rest of the report rather than the viewer's local zone.
 
@@ -150,7 +150,7 @@ Long commands report what they are doing on **stderr**:
 
 `--progress auto|always|never` (default `auto`). `auto` draws only when stderr
 is an interactive terminal, so piping, redirecting and CI logs stay clean
-without needing a flag. `NO_COLOR` drops the colour but keeps the progress.
+without needing a flag. `NO_COLOR` drops the color but keeps the progress.
 
 **stdout is never touched.** Progress output goes exclusively to stderr, and
 `tests/stdout_is_never_touched_by_progress.rs` asserts stdout is byte-identical
@@ -281,7 +281,7 @@ precisely what a status check alone hides.
 
 ## A known limitation
 
-Clustering groups by template, and a value it cannot recognise by shape stays
+Clustering groups by template, and a value it cannot recognize by shape stays
 part of the template. A host name is the common case — `node-4c2e`,
 `db-primary` and `srv00427` are all plausible, so there is no format to match
 on. A log line stamped with its host therefore produces one cluster per host.
@@ -329,6 +329,6 @@ Leon Sorokin, MIT licensed, vendored into `assets/vendor/` and compiled into
 the binary so reports open with no network. See
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
-## Licence
+## License
 
 MIT — see [LICENSE](LICENSE).

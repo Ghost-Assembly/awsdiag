@@ -41,7 +41,7 @@ pub struct Window {
 }
 
 /// A narrative section. `severity` only tints the heading; it carries no
-/// behaviour, so an unfamiliar value degrades to plain rather than failing.
+/// behavior, so an unfamiliar value degrades to plain rather than failing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Section {
@@ -159,7 +159,7 @@ mod tests {
     }
 
     #[test]
-    fn a_misspelt_field_is_rejected_rather_than_silently_dropped() {
+    fn a_misspelled_field_is_rejected_rather_than_silently_dropped() {
         // Without deny_unknown_fields a typo produces a report missing a
         // whole panel, with no indication anything went wrong.
         let e = serde_json::from_str::<Findings>(r#"{"title":"x","clusterz":[]}"#).unwrap_err();

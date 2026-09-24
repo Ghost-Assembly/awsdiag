@@ -7,7 +7,7 @@ Please report security issues privately through GitHub's
 rather than opening a public issue.
 
 Include what you did, what happened, and what you expected. A proof of concept
-helps but is not required. Expect an acknowledgement within a week.
+helps but is not required. Expect an acknowledgment within a week.
 
 ## What this tool touches
 

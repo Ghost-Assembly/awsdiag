@@ -110,7 +110,7 @@ pub enum Rank {
 /// A series with no datapoints yields `None` for every statistic rather than
 /// zero: "not reporting" and "reported zero" are different findings, and only
 /// one of them is good news.
-pub fn summarise(series: &Series) -> Summary {
+pub fn summarize(series: &Series) -> Summary {
     let mut points = series.points.clone();
     points.sort_by_key(|(t, _)| *t);
     let values: Vec<f64> = points
@@ -386,11 +386,11 @@ mod tests {
         assert!(align(&[series("a", &[])], t(0), t(0), 60).rows.is_empty());
     }
 
-    // ---- summarising and ranking -----------------------------------------
+    // ---- summarizing and ranking -----------------------------------------
 
     #[test]
     fn a_summary_reports_the_shape_of_a_series() {
-        let s = summarise(&series("a", &[(0, 5.0), (1, 1.0), (2, 9.0), (3, 3.0)]));
+        let s = summarize(&series("a", &[(0, 5.0), (1, 1.0), (2, 9.0), (3, 3.0)]));
         assert_eq!(s.datapoints, 4);
         assert_eq!(s.min, Some(1.0));
         assert_eq!(s.max, Some(9.0));
@@ -410,14 +410,14 @@ mod tests {
             label: "a".into(),
             points: vec![(t(2), 9.0), (t(0), 5.0), (t(1), 1.0)],
         };
-        assert_eq!(summarise(&jumbled).latest, Some(9.0));
+        assert_eq!(summarize(&jumbled).latest, Some(9.0));
     }
 
     #[test]
-    fn an_empty_series_summarises_to_nothing_not_to_zero() {
+    fn an_empty_series_summarizes_to_nothing_not_to_zero() {
         // "Not reporting" and "reported zero" are different findings, and
         // only one of them is good news.
-        let s = summarise(&series("a", &[]));
+        let s = summarize(&series("a", &[]));
         assert_eq!(s.datapoints, 0);
         assert_eq!((s.min, s.mean, s.max, s.latest), (None, None, None, None));
     }
@@ -426,8 +426,8 @@ mod tests {
     fn ranking_orders_highest_first_by_the_chosen_statistic() {
         // Chosen so the three statistics genuinely disagree: a peaks higher,
         // b is busier on average, a is higher right now.
-        let a = summarise(&series("a", &[(0, 1.0), (1, 100.0)])); // max 100, mean 50.5, latest 100
-        let b = summarise(&series("b", &[(0, 60.0), (1, 60.0)])); // max  60, mean 60.0, latest  60
+        let a = summarize(&series("a", &[(0, 1.0), (1, 100.0)])); // max 100, mean 50.5, latest 100
+        let b = summarize(&series("b", &[(0, 60.0), (1, 60.0)])); // max  60, mean 60.0, latest  60
         let order = |by| {
             rank(vec![a.clone(), b.clone()], by)
                 .into_iter()
@@ -451,8 +451,8 @@ mod tests {
     fn series_with_no_data_sort_last_whatever_the_statistic() {
         // An absent series is not a quiet one, and must not displace a
         // resource that actually reported.
-        let quiet = summarise(&series("quiet", &[(0, 0.1)]));
-        let absent = summarise(&series("absent", &[]));
+        let quiet = summarize(&series("quiet", &[(0, 0.1)]));
+        let absent = summarize(&series("absent", &[]));
         for by in [Rank::Max, Rank::Mean, Rank::Latest] {
             let order: Vec<String> = rank(vec![absent.clone(), quiet.clone()], by)
                 .into_iter()
@@ -464,8 +464,8 @@ mod tests {
 
     #[test]
     fn equal_values_rank_deterministically() {
-        let a = summarise(&series("bbb", &[(0, 7.0)]));
-        let b = summarise(&series("aaa", &[(0, 7.0)]));
+        let a = summarize(&series("bbb", &[(0, 7.0)]));
+        let b = summarize(&series("aaa", &[(0, 7.0)]));
         let order: Vec<String> = rank(vec![a, b], Rank::Max)
             .into_iter()
             .map(|s| s.label)
@@ -485,7 +485,7 @@ mod tests {
             label: "a".into(),
             points: vec![(t(0), 1.0), (t(1), f64::NAN), (t(2), 3.0)],
         };
-        let s = summarise(&poisoned);
+        let s = summarize(&poisoned);
         assert_eq!(s.datapoints, 2);
         assert_eq!(s.max, Some(3.0));
         assert_eq!(s.mean, Some(2.0));

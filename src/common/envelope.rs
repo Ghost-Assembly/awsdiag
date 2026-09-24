@@ -123,7 +123,7 @@ mod tests {
     }
 
     #[test]
-    fn success_serialises_with_every_contract_field_present() {
+    fn success_serializes_with_every_contract_field_present() {
         let v = serde_json::to_value(env(vec!["a", "b"])).unwrap();
         assert_eq!(v["ok"], json!(true));
         assert_eq!(v["command"], json!("logs scan"));
@@ -135,7 +135,7 @@ mod tests {
     }
 
     #[test]
-    fn failure_serialises_with_ok_false_and_carries_the_hint() {
+    fn failure_serializes_with_ok_false_and_carries_the_hint() {
         let err = Error::Auth {
             profile: "beta-power".into(),
             sso: true,

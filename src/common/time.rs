@@ -140,7 +140,7 @@ mod tests {
     }
 
     #[test]
-    fn rfc3339_instants_pass_through_and_normalise_to_utc() {
+    fn rfc3339_instants_pass_through_and_normalize_to_utc() {
         assert_eq!(
             parse_instant("2026-09-04T10:00:00Z", now()).unwrap(),
             at(2026, 9, 4, 10, 0, 0)

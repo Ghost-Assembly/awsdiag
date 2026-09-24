@@ -20,8 +20,8 @@ setup:
 # measured at 528 strings containing the builder's home directory, which
 # `strip = true` does NOT remove. Publishing a locally built binary would
 # therefore publish the builder's username. `trim-paths` would be the tidy
-# fix but is not stabilised in Cargo 1.98, so remap explicitly. CI builds are
-# already clean (the runner's path is generic), but release artefacts must
+# fix but is not stabilized in Cargo 1.98, so remap explicitly. CI builds are
+# already clean (the runner's path is generic), but release artifacts must
 # not depend on where they happened to be built.
 export CARGO_HOME := env_var_or_default("CARGO_HOME", env_var("HOME") / ".cargo")
 remap := "--remap-path-prefix=" + CARGO_HOME + "=/cargo " + \
@@ -44,7 +44,7 @@ sonar-reports:
     # the same invocation `just lint` gates on, so the report and the gate can
     # never disagree about what was checked. Without `-D warnings` it exits 0
     # on warnings and non-zero only on a genuine compile failure, which is the
-    # behaviour wanted here.
+    # behavior wanted here.
     mkdir -p target/sonar
     cargo clippy --all-targets --all-features --message-format=json \
         > target/sonar/clippy-report.json
@@ -116,7 +116,7 @@ build:
 run *ARGS:
     cargo run -- {{ARGS}}
 
-# Remove build artefacts.
+# Remove build artifacts.
 clean:
     cargo clean
 
