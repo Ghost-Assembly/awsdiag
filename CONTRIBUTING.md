@@ -28,12 +28,15 @@ supported.
 ## House rules
 
 - `just ci` must pass. Clippy warnings are errors.
-- Conventional Commits, imperative subject, no trailing period.
+- Conventional Commits, imperative subject, no trailing period. PRs are
+  squashed on merge.
 - Tests come with the change. If a test would still pass with the feature
   removed, it is not testing the feature — several bugs in this codebase were
   found exactly there.
-- No `unwrap()` or `expect()` outside test code. The crate is
-  `forbid(unsafe_code)` for everything that ships.
-- New `aws-sdk-*` dependencies need `default-features = false` plus
-  `default-https-client` and `rt-tokio` — the default features pull a legacy
-  TLS stack with known advisories. `just security` catches a regression.
+
+The invariants a change must not break — read-only AWS calls, stdout
+purity, the JSON envelope contract, no `unwrap()`/`expect()` outside tests,
+`forbid(unsafe_code)`, the `aws-sdk-*` feature flags, and the rest — are kept
+in one place: [`AGENTS.md`](AGENTS.md). That file is the source of truth for
+agent-grade rules; this section stays intentionally short rather than
+repeating them.
