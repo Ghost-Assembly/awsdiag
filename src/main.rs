@@ -226,6 +226,11 @@ enum LogsAction {
         stream: Option<String>,
         #[arg(long, value_name = "PATTERN")]
         filter: Option<String>,
+        /// Cap on log groups a glob may fan out to. Match the scan's value,
+        /// or a glob scan's cluster is looked for in fewer groups than it
+        /// came from.
+        #[arg(long, default_value_t = awsdiag::cmd::logs::DEFAULT_MAX_GROUPS, value_name = "N")]
+        max_groups: usize,
         #[command(flatten)]
         window: WindowArgs,
         #[command(flatten)]
@@ -235,10 +240,14 @@ enum LogsAction {
     },
     /// Print recent raw events, newest last.
     Tail {
+        /// Log group name, or a glob such as '/aws/lambda/*'.
         #[arg(long, value_name = "NAME")]
         group: String,
         #[arg(long, value_name = "PATTERN")]
         filter: Option<String>,
+        /// Cap on log groups a glob may fan out to.
+        #[arg(long, default_value_t = awsdiag::cmd::logs::DEFAULT_MAX_GROUPS, value_name = "N")]
+        max_groups: usize,
         #[command(flatten)]
         window: WindowArgs,
         #[command(flatten)]
@@ -266,32 +275,20 @@ enum CacheAction {
 async fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
     match &cli.command {
-        Command::Cache { action } => {
-            let (result, format) = match action {
-                CacheAction::Status { out } => {
-                    let p = Progress::new(out.progress);
-                    (
-                        cmd::cache::status(chrono::Utc::now(), &p)
-                            .map(|e| output::render(&e, out.output)),
-                        out.output,
-                    )
-                }
-                CacheAction::Clear { out } => {
-                    let p = Progress::new(out.progress);
-                    (
-                        cmd::cache::clear(&p).map(|e| output::render(&e, out.output)),
-                        out.output,
-                    )
-                }
-            };
-            match result {
-                Ok(text) => {
-                    println!("{text}");
-                    std::process::ExitCode::SUCCESS
-                }
-                Err(e) => fail("cache", &e, format),
+        Command::Cache { action } => match action {
+            CacheAction::Status { out } => {
+                let progress = Progress::new(out.progress);
+                let result = cmd::cache::status(chrono::Utc::now(), &progress)
+                    .and_then(|e| output::render(&e, out.output));
+                finish("cache status", result, out.output, &progress)
             }
-        }
+            CacheAction::Clear { out } => {
+                let progress = Progress::new(out.progress);
+                let result =
+                    cmd::cache::clear(&progress).and_then(|e| output::render(&e, out.output));
+                finish("cache clear", result, out.output, &progress)
+            }
+        },
         Command::Report {
             data,
             out,
@@ -313,30 +310,21 @@ async fn main() -> std::process::ExitCode {
             let progress = Progress::new(output.progress);
             let result = (|| {
                 let findings = report::read_findings(path)?;
-                report::write_report(&findings, out, &progress)
+                let summary = report::write_report(&findings, out, &progress)?;
+                let env = Envelope::new("report", json!({}), vec![summary]);
+                output::render(&env, output.output)
             })();
-            match result {
-                Ok(summary) => {
-                    let env = Envelope::new("report", json!({}), vec![summary]);
-                    emit(output::render(&env, output.output))
-                }
-                Err(e) => {
-                    progress.abandon();
-                    fail("report", &e, output.output)
-                }
-            }
+            finish("report", result, output.output, &progress)
         }
         Command::Ec2 { action } => run_ec2(action).await,
         Command::Metrics { action } => run_metrics(action).await,
         Command::Logs { action } => run_logs(action).await,
         Command::Whoami { target, out } => {
-            match cmd::whoami::run(target, &Progress::new(out.progress)).await {
-                Ok(env) => {
-                    println!("{}", output::render(&env, out.output));
-                    std::process::ExitCode::SUCCESS
-                }
-                Err(e) => fail("whoami", &e, out.output),
-            }
+            let progress = Progress::new(out.progress);
+            let result = cmd::whoami::run(target, &progress)
+                .await
+                .and_then(|env| output::render(&env, out.output));
+            finish("whoami", result, out.output, &progress)
         }
     }
 }
@@ -351,7 +339,7 @@ async fn run_ec2(action: &Ec2Action) -> std::process::ExitCode {
             out,
         } => {
             let progress = Progress::new(out.progress);
-            match ec2::ls(
+            let result = ec2::ls(
                 target,
                 state.as_deref(),
                 name.as_deref(),
@@ -359,13 +347,8 @@ async fn run_ec2(action: &Ec2Action) -> std::process::ExitCode {
                 &progress,
             )
             .await
-            {
-                Ok(env) => emit(output::render(&env, out.output)),
-                Err(e) => {
-                    progress.abandon();
-                    fail("ec2 ls", &e, out.output)
-                }
-            }
+            .and_then(|env| output::render(&env, out.output));
+            finish("ec2 ls", result, out.output, &progress)
         }
         Ec2Action::Show {
             instances,
@@ -374,13 +357,10 @@ async fn run_ec2(action: &Ec2Action) -> std::process::ExitCode {
             out,
         } => {
             let progress = Progress::new(out.progress);
-            match ec2::show(target, instances, name.as_deref(), &progress).await {
-                Ok(env) => emit(output::render(&env, out.output)),
-                Err(e) => {
-                    progress.abandon();
-                    fail("ec2 show", &e, out.output)
-                }
-            }
+            let result = ec2::show(target, instances, name.as_deref(), &progress)
+                .await
+                .and_then(|env| output::render(&env, out.output));
+            finish("ec2 show", result, out.output, &progress)
         }
         Ec2Action::Health {
             instances,
@@ -388,13 +368,10 @@ async fn run_ec2(action: &Ec2Action) -> std::process::ExitCode {
             out,
         } => {
             let progress = Progress::new(out.progress);
-            match ec2::health(target, instances, out.limit, &progress).await {
-                Ok(env) => emit(output::render(&env, out.output)),
-                Err(e) => {
-                    progress.abandon();
-                    fail("ec2 health", &e, out.output)
-                }
-            }
+            let result = ec2::health(target, instances, out.limit, &progress)
+                .await
+                .and_then(|env| output::render(&env, out.output));
+            finish("ec2 health", result, out.output, &progress)
         }
     }
 }
@@ -418,16 +395,10 @@ async fn run_metrics(action: &MetricsAction) -> std::process::ExitCode {
                     .map(|s| metrics::SeriesSpec::parse(s))
                     .collect::<Result<Vec<_>, _>>()?;
                 let env = metrics::compare(target, &specs, w, *period, &progress).await?;
-                Ok::<_, awsdiag::common::errors::Error>(output::render(&env, out.output))
+                output::render(&env, out.output)
             }
             .await;
-            match result {
-                Ok(text) => emit(text),
-                Err(e) => {
-                    progress.abandon();
-                    fail("metrics compare", &e, out.output)
-                }
-            }
+            finish("metrics compare", result, out.output, &progress)
         }
         MetricsAction::Top {
             namespace,
@@ -455,16 +426,10 @@ async fn run_metrics(action: &MetricsAction) -> std::process::ExitCode {
                     period: *period,
                 };
                 let env = metrics::top(target, &req, &progress).await?;
-                Ok::<_, awsdiag::common::errors::Error>(output::render(&env, out.output))
+                output::render(&env, out.output)
             }
             .await;
-            match result {
-                Ok(text) => emit(text),
-                Err(e) => {
-                    progress.abandon();
-                    fail("metrics top", &e, out.output)
-                }
-            }
+            finish("metrics top", result, out.output, &progress)
         }
     }
 }
@@ -478,17 +443,13 @@ async fn run_logs(action: &LogsAction) -> std::process::ExitCode {
             pattern,
             target,
             out,
-        } => match logs::groups(
-            target,
-            pattern.as_deref(),
-            out.limit,
-            &Progress::new(out.progress),
-        )
-        .await
-        {
-            Ok(e) => emit(output::render(&e, out.output)),
-            Err(e) => fail("logs groups", &e, out.output),
-        },
+        } => {
+            let progress = Progress::new(out.progress);
+            let result = logs::groups(target, pattern.as_deref(), out.limit, &progress)
+                .await
+                .and_then(|env| output::render(&env, out.output));
+            finish("logs groups", result, out.output, &progress)
+        }
 
         LogsAction::Scan {
             group,
@@ -525,9 +486,7 @@ async fn run_logs(action: &LogsAction) -> std::process::ExitCode {
                 if *no_cluster {
                     let env =
                         Envelope::new("logs scan", params, scan.events).truncated(scan.truncated);
-                    return Ok::<_, awsdiag::common::errors::Error>(output::render(
-                        &env, out.output,
-                    ));
+                    return output::render(&env, out.output);
                 }
 
                 // The baseline is the equally long period immediately before
@@ -543,16 +502,17 @@ async fn run_logs(action: &LogsAction) -> std::process::ExitCode {
                     })
                     .transpose()?;
 
-                let clusters =
+                let (clusters, baseline_truncated) =
                     logs::cluster_events(target, &req, &scan.events, base, &progress).await?;
-                let env = Envelope::new("logs scan", params, clusters).truncated(scan.truncated);
-                Ok(output::render(&env, out.output))
+                // A capped baseline undercounts, which makes steady clusters
+                // read as new or spiking; that is as incomplete as a capped
+                // window and is reported the same way.
+                let env = Envelope::new("logs scan", params, clusters)
+                    .truncated(scan.truncated || baseline_truncated);
+                output::render(&env, out.output)
             }
             .await;
-            match result {
-                Ok(text) => emit(text),
-                Err(e) => fail("logs scan", &e, out.output),
-            }
+            finish("logs scan", result, out.output, &progress)
         }
 
         LogsAction::Drill {
@@ -560,6 +520,7 @@ async fn run_logs(action: &LogsAction) -> std::process::ExitCode {
             group,
             stream,
             filter,
+            max_groups,
             window,
             target,
             out,
@@ -572,7 +533,7 @@ async fn run_logs(action: &LogsAction) -> std::process::ExitCode {
                     window: w,
                     filter: filter.as_deref(),
                     limit: None,
-                    max_groups: 1,
+                    max_groups: *max_groups,
                 };
                 let (scan, profile) = logs::fetch(target, &req, &progress).await?;
                 let picked = logs::select_cluster(&scan.events, cluster, stream.as_deref());
@@ -589,18 +550,16 @@ async fn run_logs(action: &LogsAction) -> std::process::ExitCode {
                     rows,
                 )
                 .truncated(truncated || scan.truncated);
-                Ok::<_, awsdiag::common::errors::Error>(output::render(&env, out.output))
+                output::render(&env, out.output)
             }
             .await;
-            match result {
-                Ok(text) => emit(text),
-                Err(e) => fail("logs drill", &e, out.output),
-            }
+            finish("logs drill", result, out.output, &progress)
         }
 
         LogsAction::Tail {
             group,
             filter,
+            max_groups,
             window,
             target,
             out,
@@ -613,7 +572,7 @@ async fn run_logs(action: &LogsAction) -> std::process::ExitCode {
                     window: w,
                     filter: filter.as_deref(),
                     limit: out.limit,
-                    max_groups: 1,
+                    max_groups: *max_groups,
                 };
                 let (scan, profile) = logs::fetch(target, &req, &progress).await?;
                 let env = Envelope::new(
@@ -624,35 +583,56 @@ async fn run_logs(action: &LogsAction) -> std::process::ExitCode {
                     scan.events,
                 )
                 .truncated(scan.truncated);
-                Ok::<_, awsdiag::common::errors::Error>(output::render(&env, out.output))
+                output::render(&env, out.output)
             }
             .await;
-            match result {
-                Ok(text) => emit(text),
-                Err(e) => fail("logs tail", &e, out.output),
-            }
+            finish("logs tail", result, out.output, &progress)
         }
     }
 }
 
-fn emit(text: String) -> std::process::ExitCode {
-    println!("{text}");
-    std::process::ExitCode::SUCCESS
+/// Print a rendered result, or fail with whatever stopped it -- including a
+/// render error. Progress is cleared on every failure, so a spinner is never
+/// left frozen above the error.
+fn finish(
+    command: &str,
+    result: Result<String, Error>,
+    format: OutputFormat,
+    progress: &Progress,
+) -> std::process::ExitCode {
+    match result {
+        Ok(text) => {
+            println!("{text}");
+            std::process::ExitCode::SUCCESS
+        }
+        Err(e) => {
+            progress.abandon();
+            fail(command, &e, format)
+        }
+    }
 }
 
 /// Emit the error envelope on stdout and a human summary on stderr.
 ///
-/// stdout stays machine-parseable in every case, so a caller can pipe to `jq`
-/// unconditionally rather than branching on the exit code first; the stderr
-/// line is what a person sees when running it by hand.
+/// For the machine formats stdout stays parseable in every case, so a caller
+/// can pipe to `jq` unconditionally rather than branching on the exit code
+/// first: `json` gets the envelope, `ndjson` gets it as a single line so a
+/// line-oriented reader still sees one object per line. `text` is for a
+/// person, who reads stderr, so stdout stays empty rather than repeating the
+/// same line twice.
 fn fail(command: &str, err: &Error, format: OutputFormat) -> std::process::ExitCode {
     let envelope = ErrorEnvelope::new(command, err);
-    match format {
-        OutputFormat::Text => println!("error: {err}"),
-        _ => println!(
-            "{}",
-            serde_json::to_string_pretty(&envelope).unwrap_or_default()
-        ),
+    let rendered = match format {
+        OutputFormat::Json => serde_json::to_string_pretty(&envelope),
+        OutputFormat::Ndjson => serde_json::to_string(&envelope),
+        OutputFormat::Text => Ok(String::new()),
+    };
+    // The envelope is plain strings and cannot fail to serialize; should it
+    // ever, the stderr lines below still say what went wrong.
+    if let Ok(text) = rendered
+        && !text.is_empty()
+    {
+        println!("{text}");
     }
     eprintln!("error: {err}");
     if let Some(h) = err.hint() {

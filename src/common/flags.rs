@@ -18,8 +18,9 @@ pub struct TargetArgs {
     #[arg(long, value_name = "NAME", conflicts_with = "profiles")]
     pub profile: Option<String>,
 
-    /// A glob selecting several profiles to query in parallel,
-    /// e.g. '*-power'. Quote it so the shell does not expand it.
+    /// A glob selecting profiles, e.g. '*-power'. `whoami` queries every
+    /// match in parallel; other commands use the first match only. Quote it
+    /// so the shell does not expand it.
     #[arg(long, value_name = "GLOB")]
     pub profiles: Option<String>,
 
@@ -43,7 +44,9 @@ impl TargetArgs {
 pub enum OutputFormat {
     /// A single envelope object. The default, and what tooling should consume.
     Json,
-    /// One JSON object per line, for streaming into line-oriented tools.
+    /// One JSON object per row, for streaming into line-oriented tools. The
+    /// final line is the envelope without `data`, carrying `count` and
+    /// `truncated`.
     Ndjson,
     /// Terse human-readable columns.
     Text,

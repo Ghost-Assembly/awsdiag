@@ -640,6 +640,7 @@ dependencies = [
  "aws-sdk-cloudwatchlogs",
  "aws-sdk-ec2",
  "aws-sdk-sts",
+ "aws-smithy-runtime-api",
  "aws-smithy-types",
  "aws-types",
  "chrono",

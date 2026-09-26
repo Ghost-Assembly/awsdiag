@@ -30,9 +30,9 @@ pub fn config_path() -> PathBuf {
 /// A missing config file yields an empty list rather than an error; the
 /// caller's glob will then fail with a message naming the pattern, which is
 /// more useful than a bare "file not found".
-pub fn available_profiles() -> Result<Vec<String>, Error> {
+pub async fn available_profiles() -> Result<Vec<String>, Error> {
     let path = config_path();
-    match std::fs::read_to_string(&path) {
+    match tokio::fs::read_to_string(&path).await {
         Ok(text) => Ok(profiles::parse_profile_names(&text)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(e) => Err(Error::Io(e)),
@@ -40,8 +40,8 @@ pub fn available_profiles() -> Result<Vec<String>, Error> {
 }
 
 /// Expand `--profile` / `--profiles` into the concrete profiles to query.
-pub fn resolve_targets(target: &TargetArgs) -> Result<Vec<String>, Error> {
-    let available = available_profiles()?;
+pub async fn resolve_targets(target: &TargetArgs) -> Result<Vec<String>, Error> {
+    let available = available_profiles().await?;
     let selector = target.selector();
     // An explicit `--profile` naming something absent from the config could
     // still work via environment credentials, so only globs and non-default
@@ -53,6 +53,23 @@ pub fn resolve_targets(target: &TargetArgs) -> Result<Vec<String>, Error> {
         .into_iter()
         .map(str::to_owned)
         .collect())
+}
+
+/// Whether `profile` authenticates via AWS SSO, per the AWS config file.
+///
+/// Decides which recovery command an auth failure suggests: `aws sso login`
+/// is the fix for an expired SSO session and a dead end for a profile using
+/// static keys. An unreadable config reads as "not SSO", which yields the
+/// generic credential-check hint rather than a wrong specific one.
+pub async fn is_sso_profile(profile: &str) -> bool {
+    is_sso_profile_in(&config_path(), profile).await
+}
+
+async fn is_sso_profile_in(config_path: &std::path::Path, profile: &str) -> bool {
+    let config = tokio::fs::read_to_string(config_path)
+        .await
+        .unwrap_or_default();
+    profiles::is_sso(&config, profile)
 }
 
 /// Build an SDK config for one profile, using cached credentials when a
@@ -67,13 +84,15 @@ pub async fn config_for(profile: &str, region: Option<&str>) -> SdkConfig {
     // The key must cover what decides the principal, not just the profile
     // name -- see `credcache::key_for`.
     let config_path = config_path();
-    let config_text = std::fs::read_to_string(&config_path).unwrap_or_default();
+    let config_text = tokio::fs::read_to_string(&config_path)
+        .await
+        .unwrap_or_default();
     let key = credcache::key_for(
         profile,
         &config_path,
         &crate::common::profiles::section_text(&config_text, profile),
     );
-    let cached = credcache::load(&key, Utc::now());
+    let cached = credcache::load(&key, Utc::now()).await;
 
     let mut loader = aws_config::defaults(BehaviorVersion::latest())
         .profile_name(profile)
@@ -106,7 +125,7 @@ pub async fn config_for(profile: &str, region: Option<&str>) -> SdkConfig {
     let Ok(creds) = provider.provide_credentials().await else {
         return config;
     };
-    credcache::store(&key, &creds);
+    credcache::store(&key, &creds).await;
     config
         .into_builder()
         .credentials_provider(SharedCredentialsProvider::new(creds))
@@ -359,6 +378,42 @@ mod tests {
     fn marker_matching_is_case_insensitive() {
         let e = err("x", Some("EXPIREDTOKEN"));
         assert_eq!(map_sdk_error(e, "p", "op", true).kind(), "auth");
+    }
+
+    #[tokio::test]
+    async fn a_static_key_profile_is_not_told_to_run_sso_login() {
+        // errors.rs: suggesting `aws sso login` for a profile using static
+        // keys sends the caller somewhere that cannot help. Every AWS call
+        // site hard-coded `sso: true`, so that is exactly what happened.
+        let path = std::env::temp_dir().join(format!("awsdiag-sso-{}", std::process::id()));
+        tokio::fs::write(
+            &path,
+            "[profile static-keys]\nregion = us-east-1\n\n\
+             [profile via-sso]\nsso_session = example-sso\n",
+        )
+        .await
+        .unwrap();
+        let static_sso = is_sso_profile_in(&path, "static-keys").await;
+        let via_sso = is_sso_profile_in(&path, "via-sso").await;
+        tokio::fs::remove_file(&path).await.ok();
+
+        assert!(!static_sso);
+        assert!(via_sso);
+        let mapped = map_sdk_error(
+            nest(&LOGGED_OUT_SSO_CHAIN),
+            "static-keys",
+            "ec2:DescribeInstances",
+            static_sso,
+        );
+        assert_eq!(mapped.kind(), "auth");
+        let hint = mapped.hint().unwrap();
+        assert!(!hint.contains("sso login"), "got: {hint}");
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_config_is_not_treated_as_sso() {
+        let missing = std::env::temp_dir().join("awsdiag-no-such-config-file");
+        assert!(!is_sso_profile_in(&missing, "anything").await);
     }
 
     #[test]

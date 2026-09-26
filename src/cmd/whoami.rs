@@ -29,7 +29,7 @@ pub struct Identity {
 }
 
 pub async fn run(target: &TargetArgs, progress: &Progress) -> Result<Envelope<Identity>, Error> {
-    let profiles = aws::resolve_targets(target)?;
+    let profiles = aws::resolve_targets(target).await?;
     progress.phase(format!(
         "resolving identity for {} profile{}",
         profiles.len(),
@@ -37,8 +37,11 @@ pub async fn run(target: &TargetArgs, progress: &Progress) -> Result<Envelope<Id
     ));
 
     // Read once, not per profile: the answer decides which recovery command
-    // an auth failure suggests.
-    let config = std::fs::read_to_string(aws::config_path()).unwrap_or_default();
+    // an auth failure suggests. `aws::is_sso_profile` is the same check for
+    // the single-profile commands, which have one profile to ask about.
+    let config = tokio::fs::read_to_string(aws::config_path())
+        .await
+        .unwrap_or_default();
     let lookups = profiles.iter().map(|p| {
         let task = progress.task(p.clone());
         let sso = crate::common::profiles::is_sso(&config, p);
