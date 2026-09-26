@@ -5,15 +5,42 @@ use crate::common::envelope::Envelope;
 use crate::common::errors::Error;
 use crate::common::flags::{TargetArgs, Window};
 use crate::common::progress::{Progress, thousands};
-use crate::metrics::align::{self, Matrix, Series};
+use crate::metrics::align::{self, Series};
 use aws_sdk_cloudwatch::Client;
 use aws_sdk_cloudwatch::types::{Dimension, Metric, MetricDataQuery, MetricStat};
 use chrono::{DateTime, Utc};
-use serde::Serialize;
 use serde_json::json;
 
 /// CloudWatch accepts at most this many queries in one `GetMetricData` call.
 const MAX_QUERIES_PER_CALL: usize = 500;
+
+/// Sub-minute periods CloudWatch accepts, for high-resolution metrics.
+const HIGH_RESOLUTION_PERIODS: [i64; 5] = [1, 5, 10, 20, 30];
+
+/// Check a `--period` before any request is made.
+///
+/// CloudWatch takes a positive multiple of 60, or one of the high-resolution
+/// periods below a minute. Anything else was passed straight through: zero or
+/// a negative number failed the API call with a service error naming no
+/// flag, and a value past `i32::MAX` was silently clamped to one that is not a
+/// multiple of 60.
+pub fn validate_period(period: Option<i64>) -> Result<Option<i64>, Error> {
+    let Some(p) = period else {
+        return Ok(None);
+    };
+    let accepted =
+        p > 0 && i32::try_from(p).is_ok() && (p % 60 == 0 || HIGH_RESOLUTION_PERIODS.contains(&p));
+    if accepted {
+        Ok(Some(p))
+    } else {
+        Err(Error::BadArgument {
+            what: format!("--period {p}"),
+            reason: "CloudWatch accepts a positive multiple of 60 seconds, \
+                     or 1, 5, 10, 20 or 30 for high-resolution metrics"
+                .into(),
+        })
+    }
+}
 
 /// One thing to plot: a namespace, a metric, a statistic and dimensions.
 #[derive(Debug, Clone)]
@@ -66,11 +93,6 @@ impl SeriesSpec {
             stat: stat.to_string(),
             dimensions,
         })
-    }
-
-    /// The full spec, used when nothing shorter tells this series apart.
-    pub fn full_label(&self) -> String {
-        self.label.clone()
     }
 }
 
@@ -152,19 +174,14 @@ pub fn label_series(specs: &[SeriesSpec]) -> Vec<String> {
     seen.insert(TIMESTAMP_KEY);
     let unique = labels.iter().all(|l| seen.insert(l.as_str()));
     if !unique {
-        labels = specs.iter().map(SeriesSpec::full_label).collect();
+        // The full spec as typed: nothing shorter tells these apart.
+        labels = specs.iter().map(|s| s.label.clone()).collect();
     }
     labels
 }
 
 /// The reserved column holding each row's instant.
 pub const TIMESTAMP_KEY: &str = "ts";
-
-#[derive(Debug, Serialize)]
-pub struct MatrixEnvelope {
-    #[serde(flatten)]
-    pub matrix: Matrix,
-}
 
 /// Fetch and align every requested series over one window.
 pub async fn compare(
@@ -180,7 +197,9 @@ pub async fn compare(
             reason: "at least one --series is required".into(),
         });
     }
-    let profile = single_profile(target)?;
+    let period_override = validate_period(period_override)?;
+    let profile = single_profile(target).await?;
+    let sso = aws::is_sso_profile(&profile).await;
     progress.phase("resolving credentials");
     let cfg = aws::config_for(&profile, target.region.as_deref()).await;
     let client = Client::new(&cfg);
@@ -202,7 +221,16 @@ pub async fn compare(
         let task = progress.task(format!("batch {}", i + 1));
         let offset = i * MAX_QUERIES_PER_CALL;
         series.extend(
-            fetch_batch(&client, &profile, chunk, &labels[offset..], window, period).await?,
+            fetch_batch(
+                &client,
+                &profile,
+                sso,
+                chunk,
+                &labels[offset..],
+                window,
+                period,
+            )
+            .await?,
         );
         task.done(format!("batch {} · {} series", i + 1, chunk.len()));
     }
@@ -318,19 +346,20 @@ pub async fn top(
         window,
         period: period_override,
     } = *req;
-    let profile = single_profile(target)?;
+    let period_override = validate_period(period_override)?;
+    let profile = single_profile(target).await?;
+    let sso = aws::is_sso_profile(&profile).await;
     progress.phase("resolving credentials");
     let cfg = aws::config_for(&profile, target.region.as_deref()).await;
     let client = Client::new(&cfg);
 
     progress.phase(format!("discovering {dimension} values in {namespace}"));
-    let (values, truncated) =
-        discover_dimension(&client, &profile, namespace, metric, dimension, progress).await?;
+    let (values, truncated) = discover_dimension(
+        &client, &profile, sso, namespace, metric, dimension, progress,
+    )
+    .await?;
     if values.is_empty() {
-        return Err(Error::BadSpec {
-            spec: format!("{namespace}/{metric}"),
-            reason: format!("no metrics found with dimension {dimension}"),
-        });
+        return Err(no_metrics_error(namespace, metric, dimension));
     }
 
     let specs: Vec<SeriesSpec> = values
@@ -356,7 +385,16 @@ pub async fn top(
         let task = progress.task(format!("batch {}", i + 1));
         let offset = i * MAX_QUERIES_PER_CALL;
         series.extend(
-            fetch_batch(&client, &profile, chunk, &labels[offset..], window, period).await?,
+            fetch_batch(
+                &client,
+                &profile,
+                sso,
+                chunk,
+                &labels[offset..],
+                window,
+                period,
+            )
+            .await?,
         );
         task.done(format!("batch {} · {} series", i + 1, chunk.len()));
     }
@@ -392,10 +430,38 @@ pub async fn top(
     .truncated(truncated))
 }
 
+/// Add a discovered dimension value, unless the set is already full.
+///
+/// Returns `false` only when a *new* value had to be turned away -- that, and
+/// nothing else, means discovery is incomplete. Checking the size after each
+/// insert instead flagged a namespace with exactly `MAX_DISCOVERED` values as
+/// truncated, and one more duplicate after the cap did the same.
+fn admit(values: &mut std::collections::BTreeSet<String>, value: &str) -> bool {
+    if values.contains(value) {
+        return true;
+    }
+    if values.len() >= MAX_DISCOVERED {
+        return false;
+    }
+    values.insert(value.to_string());
+    true
+}
+
+/// Built as its own function so the fix from `BadSpec` to `BadArgument` --
+/// which stops this from carrying the unrelated `--series` hint -- is
+/// testable without an AWS call.
+fn no_metrics_error(namespace: &str, metric: &str, dimension: &str) -> Error {
+    Error::BadArgument {
+        what: format!("{namespace}/{metric} --dimension {dimension}"),
+        reason: "no metrics found with that dimension".into(),
+    }
+}
+
 /// Distinct values of one dimension for a metric, via ListMetrics.
 async fn discover_dimension(
     client: &Client,
     profile: &str,
+    sso: bool,
     namespace: &str,
     metric: &str,
     dimension: &str,
@@ -418,15 +484,13 @@ async fn discover_dimension(
         let out = req
             .send()
             .await
-            .map_err(|e| aws::map_sdk_error(e, profile, "cloudwatch:ListMetrics", true))?;
+            .map_err(|e| aws::map_sdk_error(e, profile, "cloudwatch:ListMetrics", sso))?;
 
         for m in out.metrics() {
             if let Some(d) = m.dimensions().iter().find(|d| d.name() == Some(dimension))
                 && let Some(v) = d.value()
+                && !admit(&mut values, v)
             {
-                values.insert(v.to_string());
-            }
-            if values.len() >= MAX_DISCOVERED {
                 return Ok((values.into_iter().collect(), true));
             }
         }
@@ -441,6 +505,7 @@ async fn discover_dimension(
 async fn fetch_batch(
     client: &Client,
     profile: &str,
+    sso: bool,
     specs: &[SeriesSpec],
     labels: &[String],
     window: Window,
@@ -450,7 +515,7 @@ async fn fetch_batch(
         .iter()
         .enumerate()
         .map(|(i, spec)| build_query(i, spec, period))
-        .collect::<Result<_, _>>()?;
+        .collect();
 
     let mut results: Vec<Series> = labels
         .iter()
@@ -474,7 +539,7 @@ async fn fetch_batch(
         let page = req
             .send()
             .await
-            .map_err(|e| aws::map_sdk_error(e, profile, "cloudwatch:GetMetricData", true))?;
+            .map_err(|e| aws::map_sdk_error(e, profile, "cloudwatch:GetMetricData", sso))?;
 
         for result in page.metric_data_results() {
             // Query ids are `q<index>`, so a result maps back to the spec that
@@ -503,7 +568,7 @@ async fn fetch_batch(
     Ok(results)
 }
 
-fn build_query(index: usize, spec: &SeriesSpec, period: i64) -> Result<MetricDataQuery, Error> {
+fn build_query(index: usize, spec: &SeriesSpec, period: i64) -> MetricDataQuery {
     let dimensions: Vec<Dimension> = spec
         .dimensions
         .iter()
@@ -522,20 +587,23 @@ fn build_query(index: usize, spec: &SeriesSpec, period: i64) -> Result<MetricDat
         .stat(&spec.stat)
         .build();
 
-    Ok(MetricDataQuery::builder()
+    MetricDataQuery::builder()
         .id(format!("q{index}"))
         .metric_stat(stat)
-        // Ascending, so points arrive in the order a chart wants them.
+        // Return this query's datapoints, rather than using it only as an
+        // input to a metric math expression. Order is not relied on:
+        // `align` buckets points by timestamp.
         .return_data(true)
-        .build())
+        .build()
 }
 
 fn to_aws(ts: DateTime<Utc>) -> aws_smithy_types::DateTime {
     aws_smithy_types::DateTime::from_millis(ts.timestamp_millis())
 }
 
-fn single_profile(target: &TargetArgs) -> Result<String, Error> {
-    aws::resolve_targets(target)?
+async fn single_profile(target: &TargetArgs) -> Result<String, Error> {
+    aws::resolve_targets(target)
+        .await?
         .into_iter()
         .next()
         .ok_or_else(|| Error::NoProfileMatch {
@@ -696,6 +764,48 @@ mod tests {
             label_series(&specs(&["AWS/Lambda/Errors:Sum"])),
             vec!["Errors"]
         );
+    }
+
+    #[test]
+    fn exactly_the_cap_is_not_truncated_but_one_more_is() {
+        use std::collections::BTreeSet;
+        let mut values = BTreeSet::new();
+        for i in 0..MAX_DISCOVERED {
+            assert!(admit(&mut values, &format!("i-{i:04}")), "value {i}");
+        }
+        // A namespace holding exactly the cap is complete. The old check ran
+        // after the insert and called this truncated.
+        assert_eq!(values.len(), MAX_DISCOVERED);
+        // A repeat of a value already held costs nothing and loses nothing.
+        assert!(admit(&mut values, "i-0000"));
+        // A genuinely new value past the cap is the only truncation.
+        assert!(!admit(&mut values, "i-new"));
+        assert_eq!(values.len(), MAX_DISCOVERED);
+    }
+
+    #[test]
+    fn a_period_must_be_one_cloudwatch_accepts() {
+        assert_eq!(validate_period(None).unwrap(), None);
+        for ok in [60, 300, 3_600, 86_400, 1, 5, 10, 20, 30] {
+            assert_eq!(validate_period(Some(ok)).unwrap(), Some(ok), "{ok}");
+        }
+        for bad in [0, -60, 45, 90, 61, i64::from(i32::MAX) + 1] {
+            let e = validate_period(Some(bad)).unwrap_err();
+            assert_eq!(e.kind(), "bad_argument", "{bad}");
+            assert!(e.to_string().contains("--period"), "{bad}: {e}");
+        }
+    }
+
+    #[test]
+    fn no_metrics_found_is_a_bad_argument_with_no_series_hint() {
+        // This used to be `BadSpec`, whose hint explains the `--series`
+        // format -- unrelated advice for `metrics top`, which has no such
+        // flag.
+        let e = no_metrics_error("AWS/EC2", "CPUUtilization", "InstanceId");
+        assert_eq!(e.kind(), "bad_argument");
+        assert!(e.hint().is_none(), "{e:?}");
+        assert!(e.to_string().contains("AWS/EC2/CPUUtilization"));
+        assert!(e.to_string().contains("InstanceId"));
     }
 
     #[test]

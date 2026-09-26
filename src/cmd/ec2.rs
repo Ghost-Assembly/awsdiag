@@ -101,7 +101,8 @@ pub async fn ls(
     limit: Option<usize>,
     progress: &Progress,
 ) -> Result<Envelope<InstanceRow>, Error> {
-    let profile = single_profile(target)?;
+    let profile = single_profile(target).await?;
+    let sso = aws::is_sso_profile(&profile).await;
     progress.phase("resolving credentials");
     let cfg = aws::config_for(&profile, target.region.as_deref()).await;
     let client = Client::new(&cfg);
@@ -110,8 +111,8 @@ pub async fn ls(
     let (rows, truncated) = describe(
         &client,
         &profile,
+        sso,
         build_filters(state, name),
-        &[],
         limit,
         progress,
     )
@@ -126,15 +127,42 @@ pub async fn ls(
     .truncated(truncated))
 }
 
+/// `ls`'s listing: every matching instance, sorted, then capped.
 async fn describe(
     client: &Client,
     profile: &str,
+    sso: bool,
     filters: Vec<Filter>,
-    ids: &[String],
     limit: Option<usize>,
     progress: &Progress,
 ) -> Result<(Vec<InstanceRow>, bool), Error> {
     let cap = limit.unwrap_or(usize::MAX);
+    let mut rows = describe_all(client, profile, sso, filters, &[], progress, row).await?;
+    // Sort first, then cap. Capping mid-page returned an arbitrary subset in
+    // API order, so `--limit 5` gave five different instances run to run and
+    // a different ordering from the uncapped command. `--limit` bounds the
+    // output, and a diagnostic tool that answers differently each time is
+    // worth an extra page of paging to avoid.
+    sort_rows(&mut rows);
+    let truncated = rows.len() > cap;
+    rows.truncate(cap);
+    Ok((rows, truncated))
+}
+
+/// Every instance DescribeInstances returns, across all pages.
+///
+/// Shared by `ls`, `show` and `health` so none of them can stop at page one:
+/// `show` once did, and a `--name` glob matching more instances than one
+/// page holds returned a partial set with nothing marking it incomplete.
+async fn describe_all<T>(
+    client: &Client,
+    profile: &str,
+    sso: bool,
+    filters: Vec<Filter>,
+    ids: &[String],
+    progress: &Progress,
+    map: fn(&Instance) -> T,
+) -> Result<Vec<T>, Error> {
     let mut rows = Vec::new();
     let mut token: Option<String> = None;
     let mut page = 0usize;
@@ -158,11 +186,11 @@ async fn describe(
         let out = req
             .send()
             .await
-            .map_err(|e| aws::map_sdk_error(e, profile, "ec2:DescribeInstances", true))?;
+            .map_err(|e| aws::map_sdk_error(e, profile, "ec2:DescribeInstances", sso))?;
 
         for reservation in out.reservations() {
             for instance in reservation.instances() {
-                rows.push(row(instance));
+                rows.push(map(instance));
             }
         }
         token = out.next_token().map(ToString::to_string);
@@ -170,15 +198,7 @@ async fn describe(
             break;
         }
     }
-    // Sort first, then cap. Capping mid-page returned an arbitrary subset in
-    // API order, so `--limit 5` gave five different instances run to run and
-    // a different ordering from the uncapped command. `--limit` bounds the
-    // output, and a diagnostic tool that answers differently each time is
-    // worth an extra page of paging to avoid.
-    sort_rows(&mut rows);
-    let truncated = rows.len() > cap;
-    rows.truncate(cap);
-    Ok((rows, truncated))
+    Ok(rows)
 }
 
 #[derive(Debug, Serialize)]
@@ -265,36 +285,38 @@ pub async fn show(
     progress: &Progress,
 ) -> Result<Envelope<InstanceDetail>, Error> {
     if instances.is_empty() && name.is_none() {
-        return Err(Error::BadSpec {
-            spec: String::new(),
+        return Err(Error::BadArgument {
+            what: "--instance/--name".into(),
             reason: "give --instance or --name; showing every instance is what `ls` is for".into(),
         });
     }
-    let profile = single_profile(target)?;
+    let profile = single_profile(target).await?;
+    let sso = aws::is_sso_profile(&profile).await;
     progress.phase("resolving credentials");
     let cfg = aws::config_for(&profile, target.region.as_deref()).await;
     let client = Client::new(&cfg);
+    show_with(&client, &profile, sso, instances, name, progress).await
+}
 
+async fn show_with(
+    client: &Client,
+    profile: &str,
+    sso: bool,
+    instances: &[String],
+    name: Option<&str>,
+    progress: &Progress,
+) -> Result<Envelope<InstanceDetail>, Error> {
     progress.phase("describing instances");
-    let mut req = client.describe_instances();
-    if !instances.is_empty() {
-        req = req.set_instance_ids(Some(instances.to_vec()));
-    }
-    let filters = build_filters(None, name);
-    if !filters.is_empty() {
-        req = req.set_filters(Some(filters));
-    }
-    let out = req
-        .send()
-        .await
-        .map_err(|e| aws::map_sdk_error(e, &profile, "ec2:DescribeInstances", true))?;
-
-    let mut rows: Vec<InstanceDetail> = out
-        .reservations()
-        .iter()
-        .flat_map(|r| r.instances())
-        .map(detail_of)
-        .collect();
+    let mut rows = describe_all(
+        client,
+        profile,
+        sso,
+        build_filters(None, name),
+        instances,
+        progress,
+        detail_of,
+    )
+    .await?;
     rows.sort_by(|a, b| {
         a.summary
             .name
@@ -335,21 +357,47 @@ pub fn is_concerning(row: &HealthRow) -> bool {
         || !row.events.is_empty()
 }
 
+/// Sort worst-first, then cap. Returns whether the cap dropped anything.
+///
+/// The order matters. Capping while paging kept whichever instances the API
+/// happened to list first and only then sorted them, so `--limit 10` in a
+/// large fleet could drop the one impaired host -- the only row that
+/// mattered -- and still report the result as complete.
+fn worst_first(rows: &mut Vec<HealthRow>, cap: usize) -> bool {
+    // Anything concerning first: a healthy fleet should need no scrolling to
+    // find the one box that is not.
+    rows.sort_by_key(|r| (!is_concerning(r), r.name.clone(), r.instance_id.clone()));
+    let truncated = rows.len() > cap;
+    rows.truncate(cap);
+    truncated
+}
+
 pub async fn health(
     target: &TargetArgs,
     instances: &[String],
     limit: Option<usize>,
     progress: &Progress,
 ) -> Result<Envelope<HealthRow>, Error> {
-    let profile = single_profile(target)?;
+    let profile = single_profile(target).await?;
+    let sso = aws::is_sso_profile(&profile).await;
     progress.phase("resolving credentials");
     let cfg = aws::config_for(&profile, target.region.as_deref()).await;
     let client = Client::new(&cfg);
+    health_with(&client, &profile, sso, instances, limit, progress).await
+}
 
+async fn health_with(
+    client: &Client,
+    profile: &str,
+    sso: bool,
+    instances: &[String],
+    limit: Option<usize>,
+    progress: &Progress,
+) -> Result<Envelope<HealthRow>, Error> {
     // Names come from DescribeInstances; status checks come from
     // DescribeInstanceStatus. Both are needed for a row a person can read.
     progress.phase("reading instance names");
-    let (named, _) = describe(&client, &profile, Vec::new(), instances, None, progress).await?;
+    let named = describe_all(client, profile, sso, Vec::new(), instances, progress, row).await?;
     // A map, not a linear scan per row: the scan made name resolution O(n·m)
     // over an account-sized list.
     let names: std::collections::HashMap<&str, &String> = named
@@ -359,10 +407,8 @@ pub async fn health(
     let name_for = |id: &str| names.get(id).map(|n| (*n).clone());
 
     progress.phase("reading status checks");
-    let cap = limit.unwrap_or(usize::MAX);
     let mut statuses = Vec::new();
     let mut token: Option<String> = None;
-    let mut truncated = false;
     let mut page = 0usize;
 
     // DescribeInstanceStatus pages at 1000. A single un-paginated call in a
@@ -381,19 +427,14 @@ pub async fn health(
         if let Some(t) = &token {
             req = req.next_token(t);
         }
-        let out = req.send().await.map_err(|e| {
-            aws::map_sdk_error(e, profile.as_str(), "ec2:DescribeInstanceStatus", true)
-        })?;
+        let out = req
+            .send()
+            .await
+            .map_err(|e| aws::map_sdk_error(e, profile, "ec2:DescribeInstanceStatus", sso))?;
 
-        for status in out.instance_statuses() {
-            if statuses.len() >= cap {
-                truncated = true;
-                break;
-            }
-            statuses.push(status.clone());
-        }
+        statuses.extend(out.instance_statuses().iter().cloned());
         token = out.next_token().map(ToString::to_string);
-        if token.is_none() || truncated {
+        if token.is_none() {
             break;
         }
     }
@@ -441,24 +482,24 @@ pub async fn health(
         })
         .collect();
 
-    // Anything concerning first: a healthy fleet should need no scrolling to
-    // find the one box that is not.
-    rows.sort_by_key(|r| (!is_concerning(r), r.name.clone(), r.instance_id.clone()));
+    // Counted over the whole fleet, before the cap, so the summary is true of
+    // the account rather than of the rows that happened to fit.
+    let total = rows.len();
     let concerning = rows.iter().filter(|r| is_concerning(r)).count();
-    progress.finish(format!(
-        "{} instances, {concerning} needing attention",
-        rows.len()
-    ));
+    let truncated = worst_first(&mut rows, limit.unwrap_or(usize::MAX));
+    progress.finish(format!("{total} instances, {concerning} needing attention"));
 
     Ok(Envelope::new(
         "ec2 health",
         json!({ "profile": profile, "instances": instances }),
         rows,
-    ))
+    )
+    .truncated(truncated))
 }
 
-fn single_profile(target: &TargetArgs) -> Result<String, Error> {
-    aws::resolve_targets(target)?
+async fn single_profile(target: &TargetArgs) -> Result<String, Error> {
+    aws::resolve_targets(target)
+        .await?
         .into_iter()
         .next()
         .ok_or_else(|| Error::NoProfileMatch {
@@ -469,6 +510,251 @@ fn single_profile(target: &TargetArgs) -> Result<String, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::progress::ProgressMode;
+
+    /// An EC2 client whose HTTP layer replays canned responses in order and
+    /// records each request body, so paging can be tested without AWS.
+    mod replay {
+        use aws_sdk_ec2::Client;
+        use aws_sdk_ec2::config::{BehaviorVersion, Credentials, Region};
+        use aws_smithy_runtime_api::client::http::{
+            HttpConnector, HttpConnectorFuture, SharedHttpConnector, http_client_fn,
+        };
+        use aws_smithy_runtime_api::client::orchestrator::HttpRequest;
+        use aws_smithy_runtime_api::http::{Response, StatusCode};
+        use aws_smithy_types::body::SdkBody;
+        use std::collections::VecDeque;
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Debug, Clone, Default)]
+        pub struct Replay {
+            responses: Arc<Mutex<VecDeque<(u16, String)>>>,
+            requests: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl Replay {
+            pub fn requests(&self) -> Vec<String> {
+                self.requests.lock().unwrap().clone()
+            }
+        }
+
+        impl HttpConnector for Replay {
+            fn call(&self, request: HttpRequest) -> HttpConnectorFuture {
+                let body = request
+                    .body()
+                    .bytes()
+                    .map(|b| String::from_utf8_lossy(b).into_owned())
+                    .unwrap_or_default();
+                self.requests.lock().unwrap().push(body);
+                let (status, text) = self
+                    .responses
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .expect("a canned response for every request");
+                HttpConnectorFuture::ready(Ok(Response::new(
+                    StatusCode::try_from(status).unwrap(),
+                    SdkBody::from(text),
+                )))
+            }
+        }
+
+        pub fn client(responses: Vec<(u16, String)>) -> (Client, Replay) {
+            let replay = Replay {
+                responses: Arc::new(Mutex::new(responses.into())),
+                requests: Arc::default(),
+            };
+            let conn = replay.clone();
+            let conf = aws_sdk_ec2::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .region(Region::new("us-east-1"))
+                .credentials_provider(Credentials::new(
+                    "AKIDTEST",
+                    "not-a-secret",
+                    None,
+                    None,
+                    "test",
+                ))
+                .http_client(http_client_fn(move |_, _| {
+                    SharedHttpConnector::new(conn.clone())
+                }))
+                .build();
+            (Client::from_conf(conf), replay)
+        }
+    }
+
+    const NS: &str = "http://ec2.amazonaws.com/doc/2016-11-15/";
+
+    /// One DescribeInstances page of `(id, name)` pairs.
+    fn instances_page(instances: &[(&str, &str)], next: Option<&str>) -> (u16, String) {
+        let items: String = instances
+            .iter()
+            .map(|(id, name)| {
+                format!(
+                    "<item><instanceId>{id}</instanceId><tagSet><item><key>Name</key>\
+                     <value>{name}</value></item></tagSet></item>"
+                )
+            })
+            .collect();
+        let next = next.map_or(String::new(), |t| format!("<nextToken>{t}</nextToken>"));
+        (
+            200,
+            format!(
+                "<DescribeInstancesResponse xmlns=\"{NS}\"><requestId>r</requestId>\
+                 <reservationSet><item><reservationId>r-1</reservationId>\
+                 <instancesSet>{items}</instancesSet></item></reservationSet>{next}\
+                 </DescribeInstancesResponse>"
+            ),
+        )
+    }
+
+    /// One DescribeInstanceStatus page of running instances as
+    /// `(id, system status, instance status)`.
+    fn status_page(statuses: &[(&str, &str, &str)], next: Option<&str>) -> (u16, String) {
+        let items: String = statuses
+            .iter()
+            .map(|(id, sys, inst)| {
+                format!(
+                    "<item><instanceId>{id}</instanceId><instanceState><code>16</code>\
+                     <name>running</name></instanceState><systemStatus><status>{sys}\
+                     </status></systemStatus><instanceStatus><status>{inst}</status>\
+                     </instanceStatus></item>"
+                )
+            })
+            .collect();
+        let next = next.map_or(String::new(), |t| format!("<nextToken>{t}</nextToken>"));
+        (
+            200,
+            format!(
+                "<DescribeInstanceStatusResponse xmlns=\"{NS}\"><requestId>r</requestId>\
+                 <instanceStatusSet>{items}</instanceStatusSet>{next}\
+                 </DescribeInstanceStatusResponse>"
+            ),
+        )
+    }
+
+    fn quiet() -> Progress {
+        Progress::new(ProgressMode::Never)
+    }
+
+    #[tokio::test]
+    async fn show_reads_every_page_not_just_the_first() {
+        // `show` sent one DescribeInstances call and ignored `nextToken`, so a
+        // `--name` glob matching more than a page returned a partial set that
+        // nothing marked as incomplete.
+        let (client, replay) = replay::client(vec![
+            instances_page(&[("i-0001", "web-01")], Some("page-2")),
+            instances_page(&[("i-0002", "web-02")], None),
+        ]);
+        let env = show_with(&client, "p", false, &[], Some("web-*"), &quiet())
+            .await
+            .expect("show succeeds");
+        let ids: Vec<&str> = env
+            .data
+            .iter()
+            .map(|d| d.summary.instance_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["i-0001", "i-0002"]);
+        let requests = replay.requests();
+        assert_eq!(requests.len(), 2, "both pages requested");
+        assert!(
+            requests[1].contains("NextToken=page-2"),
+            "second request resumes from the token: {}",
+            requests[1]
+        );
+    }
+
+    #[tokio::test]
+    async fn health_ranks_the_whole_fleet_before_applying_the_limit() {
+        // The impaired host is on the second status page. Capping while
+        // paging stopped after page one, so `--limit 2` returned two healthy
+        // hosts, dropped the only one that mattered, and said nothing about
+        // having dropped anything.
+        let (client, _) = replay::client(vec![
+            instances_page(
+                &[
+                    ("i-a", "app-a"),
+                    ("i-b", "app-b"),
+                    ("i-c", "app-c"),
+                    ("i-z", "app-z"),
+                ],
+                None,
+            ),
+            status_page(
+                &[
+                    ("i-a", "ok", "ok"),
+                    ("i-b", "ok", "ok"),
+                    ("i-c", "ok", "ok"),
+                ],
+                Some("status-2"),
+            ),
+            status_page(&[("i-z", "impaired", "ok")], None),
+        ]);
+        let env = health_with(&client, "p", false, &[], Some(2), &quiet())
+            .await
+            .expect("health succeeds");
+        assert_eq!(env.data[0].instance_id, "i-z", "worst first, even capped");
+        assert_eq!(env.data[0].name.as_deref(), Some("app-z"));
+        assert_eq!(env.count, 2);
+        assert!(
+            env.truncated,
+            "the cap dropped rows, so the envelope says so"
+        );
+    }
+
+    #[tokio::test]
+    async fn health_under_the_limit_is_not_truncated() {
+        let (client, _) = replay::client(vec![
+            instances_page(&[("i-a", "app-a")], None),
+            status_page(&[("i-a", "ok", "ok")], None),
+        ]);
+        let env = health_with(&client, "p", false, &[], Some(5), &quiet())
+            .await
+            .expect("health succeeds");
+        assert_eq!(env.count, 1);
+        assert!(!env.truncated);
+    }
+
+    #[tokio::test]
+    async fn a_static_key_profile_gets_the_non_sso_hint_from_an_ec2_call() {
+        // Every AWS call site passed `sso: true`, so expired static keys were
+        // told to run `aws sso login`.
+        let (client, _) = replay::client(vec![(
+            400,
+            "<Response><Errors><Error><Code>ExpiredToken</Code><Message>The security \
+             token included in the request is expired</Message></Error></Errors>\
+             <RequestID>r</RequestID></Response>"
+                .into(),
+        )]);
+        let err = show_with(&client, "static-keys", false, &[], Some("web-*"), &quiet())
+            .await
+            .expect_err("expired credentials fail");
+        assert_eq!(err.kind(), "auth");
+        let hint = err.hint().unwrap();
+        assert!(!hint.contains("sso login"), "got: {hint}");
+        assert!(hint.contains("static-keys"), "got: {hint}");
+    }
+
+    #[test]
+    fn worst_first_sorts_before_it_caps() {
+        let mut rows = vec![
+            row_of("running", "ok", "ok", &[]),
+            row_of("running", "ok", "ok", &[]),
+            row_of("running", "impaired", "ok", &[]),
+        ];
+        rows[2].instance_id = "i-bad".into();
+        assert!(worst_first(&mut rows, 1));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].instance_id, "i-bad");
+    }
+
+    #[test]
+    fn worst_first_within_the_cap_drops_nothing() {
+        let mut rows = vec![row_of("running", "ok", "ok", &[])];
+        assert!(!worst_first(&mut rows, 1));
+        assert!(!worst_first(&mut rows, usize::MAX));
+        assert_eq!(rows.len(), 1);
+    }
 
     fn names(filters: &[Filter]) -> Vec<&str> {
         filters.iter().filter_map(|f| f.name()).collect()

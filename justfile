@@ -1,6 +1,11 @@
 # awsdiag task runner. `just ci` is what CI runs; run it before pushing.
 
-_default:
+# Every recipe line runs under strict bash, so a failed command in a pipe
+# fails the recipe instead of being masked by the command after it.
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+# List the recipes.
+default:
     @just --list
 
 # Install the pinned toolchain and build dependencies.
@@ -112,9 +117,16 @@ security:
 build:
     cargo build --release
 
-# Run the binary; pass arguments after `--`, e.g. `just run -- whoami`.
+# Positional arguments rather than interpolating `{{ARGS}}`: interpolation
+# re-splits and glob-expands every argument in the shell, so
+# `just run whoami --profiles '*-power'` matched files in the current
+# directory instead of reaching awsdiag as a glob. Arguments go straight
+# after the recipe name; a `--` would be passed through to awsdiag.
+
+# Run the binary, e.g. `just run whoami --profile p`.
+[positional-arguments]
 run *ARGS:
-    cargo run -- {{ARGS}}
+    cargo run -- "$@"
 
 # Remove build artifacts.
 clean:

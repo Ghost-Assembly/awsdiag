@@ -22,6 +22,14 @@ const BUCKETS: usize = 60;
 /// quietly running for minutes.
 pub const DEFAULT_MAX_GROUPS: usize = 20;
 
+/// Events fetched for a `--baseline` period when no `--limit` is given.
+///
+/// The baseline only feeds per-template counts, but it can be far longer
+/// than the window (`--since 1h --baseline 7d`), and unbounded it would page
+/// through every event in it. Hitting this marks the scan truncated, since a
+/// capped baseline undercounts and makes steady clusters look new.
+pub const DEFAULT_BASELINE_LIMIT: usize = 50_000;
+
 #[derive(Debug, Serialize)]
 pub struct LogGroup {
     pub name: String,
@@ -61,13 +69,15 @@ pub async fn groups(
     limit: Option<usize>,
     progress: &Progress,
 ) -> Result<Envelope<LogGroup>, Error> {
-    let profile = single_profile(target)?;
+    let profile = single_profile(target).await?;
+    let sso = aws::is_sso_profile(&profile).await;
     progress.phase("resolving credentials");
     let cfg = aws::config_for(&profile, target.region.as_deref()).await;
     let c = client(&cfg);
 
     progress.phase("listing log groups");
-    let (names, truncated) = discover(&c, pattern, limit.unwrap_or(usize::MAX), &profile).await?;
+    let (names, truncated) =
+        discover(&c, pattern, limit.unwrap_or(usize::MAX), &profile, sso).await?;
     progress.finish(format!("{} log groups", thousands(names.len())));
 
     Ok(Envelope::new(
@@ -85,6 +95,7 @@ async fn discover(
     pattern: Option<&str>,
     limit: usize,
     profile: &str,
+    sso: bool,
 ) -> Result<(Vec<LogGroup>, bool), Error> {
     // A glob's literal prefix still narrows the server-side query, so
     // `/aws/lambda/*` does not page through every group in the account.
@@ -92,17 +103,7 @@ async fn discover(
         Some(i) => &p[..i],
         None => p,
     });
-    let matcher = pattern
-        .filter(|p| is_glob(p))
-        .map(|p| {
-            globset::Glob::new(p)
-                .map(|g| g.compile_matcher())
-                .map_err(|e| Error::Aws {
-                    operation: "logs:DescribeLogGroups".into(),
-                    message: format!("bad group pattern {p:?}: {e}"),
-                })
-        })
-        .transpose()?;
+    let matcher = group_matcher(pattern)?;
 
     let mut out = Vec::new();
     let mut token: Option<String> = None;
@@ -119,7 +120,7 @@ async fn discover(
         let page = req
             .send()
             .await
-            .map_err(|e| aws::map_sdk_error(e, profile, "logs:DescribeLogGroups", true))?;
+            .map_err(|e| aws::map_sdk_error(e, profile, "logs:DescribeLogGroups", sso))?;
 
         for g in page.log_groups() {
             let Some(name) = g.log_group_name() else {
@@ -150,6 +151,25 @@ async fn discover(
     Ok((out, truncated))
 }
 
+/// Compile a group pattern, when it is a glob.
+///
+/// An uncompilable glob is the caller's argument, not an AWS failure: it is
+/// rejected before any request is made, and reporting it as kind `aws` sent
+/// the caller looking for a service problem that did not exist.
+fn group_matcher(pattern: Option<&str>) -> Result<Option<globset::GlobMatcher>, Error> {
+    pattern
+        .filter(|p| is_glob(p))
+        .map(|p| {
+            globset::Glob::new(p)
+                .map(|g| g.compile_matcher())
+                .map_err(|e| Error::BadArgument {
+                    what: format!("log group pattern {p:?}"),
+                    reason: e.to_string(),
+                })
+        })
+        .transpose()
+}
+
 // ---------------------------------------------------------------------------
 // scan
 // ---------------------------------------------------------------------------
@@ -163,7 +183,6 @@ pub struct ScanRequest<'a> {
 }
 
 pub struct ScanResult {
-    pub clusters: Vec<Cluster>,
     pub events: Vec<RawEvent>,
     pub groups_scanned: Vec<String>,
     pub truncated: bool,
@@ -216,7 +235,8 @@ pub async fn fetch(
     req: &ScanRequest<'_>,
     progress: &Progress,
 ) -> Result<(ScanResult, String), Error> {
-    let profile = single_profile(target)?;
+    let profile = single_profile(target).await?;
+    let sso = aws::is_sso_profile(&profile).await;
     // A cold credential cache is a real pause that otherwise looks like a hang.
     progress.phase("resolving credentials");
     let cfg = aws::config_for(&profile, target.region.as_deref()).await;
@@ -224,7 +244,7 @@ pub async fn fetch(
 
     let mut truncated = false;
     let group_names: Vec<String> = if is_glob(req.group) {
-        let (found, more) = discover(&c, Some(req.group), req.max_groups, &profile).await?;
+        let (found, more) = discover(&c, Some(req.group), req.max_groups, &profile, sso).await?;
         truncated |= more;
         if found.is_empty() {
             return Err(Error::Aws {
@@ -249,7 +269,16 @@ pub async fn fetch(
         let window = req.window;
         let name = name.clone();
         tasks.push(async move {
-            fetch_group(&c, &profile, &name, window, filter.as_deref(), per_group).await
+            fetch_group(
+                &c,
+                &profile,
+                sso,
+                &name,
+                window,
+                filter.as_deref(),
+                per_group,
+            )
+            .await
         });
     }
 
@@ -263,7 +292,6 @@ pub async fn fetch(
 
     Ok((
         ScanResult {
-            clusters: Vec::new(),
             events,
             groups_scanned: group_names,
             truncated,
@@ -275,6 +303,7 @@ pub async fn fetch(
 async fn fetch_group(
     c: &Client,
     profile: &str,
+    sso: bool,
     group: &str,
     window: Window,
     filter: Option<&str>,
@@ -299,7 +328,7 @@ async fn fetch_group(
         let page = req
             .send()
             .await
-            .map_err(|e| aws::map_sdk_error(e, profile, "logs:FilterLogEvents", true))?;
+            .map_err(|e| aws::map_sdk_error(e, profile, "logs:FilterLogEvents", sso))?;
 
         for e in page.events() {
             if out.len() >= cap {
@@ -322,37 +351,60 @@ async fn fetch_group(
 }
 
 /// Cluster fetched events, optionally classifying against a baseline period.
+///
+/// The flag returned alongside the clusters says the baseline was capped.
+/// The caller folds it into the envelope's `truncated`: counts from a partial
+/// baseline are too low, so `new` and `spiking` would be overstated.
 pub async fn cluster_events(
     target: &TargetArgs,
     req: &ScanRequest<'_>,
     events: &[RawEvent],
     baseline: Option<Window>,
     progress: &Progress,
-) -> Result<Vec<Cluster>, Error> {
+) -> Result<(Vec<Cluster>, bool), Error> {
     progress.phase(format!("clustering {} events", thousands(events.len())));
     let log_events: Vec<LogEvent> = events.iter().map(to_log_event).collect();
     let mut clusters = template::cluster(&log_events, req.window.since, req.window.until, BUCKETS);
 
+    let mut baseline_truncated = false;
     if let Some(base_window) = baseline {
         // The baseline scans its own window, roughly doubling the work; a
         // distinct phase explains why the command suddenly takes twice as long.
         progress.phase("scanning baseline period");
-        let base_req = ScanRequest {
-            window: base_window,
-            ..*req
-        };
-        let (base, _) = fetch(target, &base_req, progress).await?;
+        let (base, _) = fetch(target, &baseline_request(req, base_window), progress).await?;
         progress.phase("classifying against baseline");
-        let base_events: Vec<LogEvent> = base.events.iter().map(to_log_event).collect();
-        let counts = template::baseline_counts(&base_events);
-        template::apply_baseline(
-            &mut clusters,
-            &counts,
-            (req.window.until - req.window.since).num_seconds(),
-            (base_window.until - base_window.since).num_seconds(),
-        );
+        baseline_truncated = classify(&mut clusters, &base, req.window, base_window);
     }
-    Ok(clusters)
+    Ok((clusters, baseline_truncated))
+}
+
+/// The scan of the baseline period: the same query over the earlier window,
+/// bounded by `--limit` when given and by `DEFAULT_BASELINE_LIMIT` otherwise.
+fn baseline_request<'a>(req: &ScanRequest<'a>, base_window: Window) -> ScanRequest<'a> {
+    ScanRequest {
+        window: base_window,
+        limit: Some(req.limit.unwrap_or(DEFAULT_BASELINE_LIMIT)),
+        ..*req
+    }
+}
+
+/// Mark each cluster against the baseline scan. Returns whether that scan was
+/// truncated, so the caller cannot drop it on the floor.
+fn classify(
+    clusters: &mut [Cluster],
+    base: &ScanResult,
+    window: Window,
+    base_window: Window,
+) -> bool {
+    let base_events: Vec<LogEvent> = base.events.iter().map(to_log_event).collect();
+    let counts = template::baseline_counts(&base_events);
+    template::apply_baseline(
+        clusters,
+        &counts,
+        (window.until - window.since).num_seconds(),
+        (base_window.until - base_window.since).num_seconds(),
+    );
+    base.truncated
 }
 
 fn to_log_event(e: &RawEvent) -> LogEvent {
@@ -384,8 +436,8 @@ pub fn select_cluster<'a>(
         .collect()
 }
 
-fn single_profile(target: &TargetArgs) -> Result<String, Error> {
-    let profiles = aws::resolve_targets(target)?;
+async fn single_profile(target: &TargetArgs) -> Result<String, Error> {
+    let profiles = aws::resolve_targets(target).await?;
     // Log scans are heavy; fanning one across accounts silently would be a
     // surprising amount of work from a single flag.
     profiles
@@ -467,7 +519,6 @@ mod tests {
 
     fn scan_of(hours: &[u32], truncated: bool) -> ScanResult {
         ScanResult {
-            clusters: vec![],
             events: hours
                 .iter()
                 .map(|h| RawEvent {
@@ -514,6 +565,82 @@ mod tests {
         let v = scan_of(&[1, 2], false).coverage_json(w);
         assert!(v.get("note").is_none());
         assert_eq!(v["events_from"], json!(at(1).to_rfc3339()));
+    }
+
+    #[test]
+    fn an_uncompilable_group_glob_is_a_bad_argument_not_an_aws_error() {
+        // Rejected before any request: calling it `aws` sent the caller
+        // looking for a service problem that did not exist.
+        let err = group_matcher(Some("/aws/lambda/[unclosed")).unwrap_err();
+        assert_eq!(err.kind(), "bad_argument");
+        assert!(err.to_string().contains("[unclosed"), "{err}");
+    }
+
+    #[test]
+    fn literal_names_and_valid_globs_compile() {
+        assert!(group_matcher(None).unwrap().is_none());
+        assert!(group_matcher(Some("/aws/lambda/fn")).unwrap().is_none());
+        let m = group_matcher(Some("/aws/lambda/*")).unwrap().unwrap();
+        assert!(m.is_match("/aws/lambda/fn"));
+    }
+
+    fn request(limit: Option<usize>) -> ScanRequest<'static> {
+        ScanRequest {
+            group: "/g",
+            window: Window {
+                since: at(12),
+                until: at(13),
+            },
+            filter: Some("ERROR"),
+            limit,
+            max_groups: 7,
+        }
+    }
+
+    #[test]
+    fn an_unlimited_scan_still_bounds_its_baseline() {
+        // `--since 1h --baseline 7d` with no --limit paged through a week of
+        // events to build counts.
+        let base_window = Window {
+            since: at(0),
+            until: at(12),
+        };
+        let base = baseline_request(&request(None), base_window);
+        assert_eq!(base.limit, Some(DEFAULT_BASELINE_LIMIT));
+        assert_eq!(base.window, base_window);
+        // Everything else is the scan's own query.
+        assert_eq!(base.group, "/g");
+        assert_eq!(base.filter, Some("ERROR"));
+        assert_eq!(base.max_groups, 7);
+    }
+
+    #[test]
+    fn an_explicit_limit_applies_to_the_baseline_too() {
+        let base_window = Window {
+            since: at(0),
+            until: at(12),
+        };
+        assert_eq!(
+            baseline_request(&request(Some(500)), base_window).limit,
+            Some(500)
+        );
+    }
+
+    #[test]
+    fn a_truncated_baseline_is_reported_not_dropped() {
+        // It was fetched and its flag discarded: a capped baseline undercounts,
+        // so clusters read as new or spiking while the scan said complete.
+        let w = Window {
+            since: at(12),
+            until: at(13),
+        };
+        let bw = Window {
+            since: at(0),
+            until: at(12),
+        };
+        let mut clusters = Vec::new();
+        assert!(classify(&mut clusters, &scan_of(&[1, 2], true), w, bw));
+        assert!(!classify(&mut clusters, &scan_of(&[1, 2], false), w, bw));
     }
 
     #[test]

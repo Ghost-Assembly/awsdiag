@@ -32,13 +32,32 @@ use std::path::{Path, PathBuf};
 /// mid-request on a slow call.
 const EXPIRY_SKEW: Duration = Duration::seconds(120);
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, PartialEq, Eq)]
 pub struct Entry {
     pub access_key_id: String,
     pub secret_access_key: String,
     pub session_token: Option<String>,
     /// Absent means non-expiring, which is never cached — see `store`.
     pub expires_at: Option<DateTime<Utc>>,
+}
+
+/// Hand-written so the secret half of the credential cannot reach a log, a
+/// panic message or an `{:?}` in an error. A derived `Debug` printed the
+/// secret key and session token verbatim. The access key id is kept, as the
+/// SDK's own `Credentials` does: it identifies the key without granting
+/// anything.
+impl std::fmt::Debug for Entry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Entry")
+            .field("access_key_id", &self.access_key_id)
+            .field("secret_access_key", &"** redacted **")
+            .field(
+                "session_token",
+                &self.session_token.as_ref().map(|_| "** redacted **"),
+            )
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 impl Entry {
@@ -145,11 +164,11 @@ fn stable_hash(s: &str) -> String {
 }
 
 /// Load a usable entry, or `None` for any reason at all.
-pub fn load(key: &CacheKey, now: DateTime<Utc>) -> Option<Entry> {
+pub async fn load(key: &CacheKey, now: DateTime<Utc>) -> Option<Entry> {
     if disabled() {
         return None;
     }
-    let text = std::fs::read_to_string(entry_path(key)?).ok()?;
+    let text = tokio::fs::read_to_string(entry_path(key)?).await.ok()?;
     let entry: Entry = serde_json::from_str(&text).ok()?;
     entry.is_usable_at(now).then_some(entry)
 }
@@ -159,7 +178,7 @@ pub fn load(key: &CacheKey, now: DateTime<Utc>) -> Option<Entry> {
 /// Credentials with no expiry are not cached: without one there is no way to
 /// know when the entry became wrong, and a stale entry is worse than none.
 /// Errors are swallowed deliberately — see the module note.
-pub fn store(key: &CacheKey, creds: &Credentials) {
+pub async fn store(key: &CacheKey, creds: &Credentials) {
     if disabled() {
         return;
     }
@@ -173,7 +192,11 @@ pub fn store(key: &CacheKey, creds: &Credentials) {
     let Some(path) = entry_path(key) else {
         return;
     };
-    let _ = write_private(&path, &entry);
+    // One blocking task for the whole sequence rather than a `tokio::fs` call
+    // per step: the order -- owner-only directory, `create_new` at mode
+    // 0600, fsync, rename -- is what keeps the file private and whole, and
+    // it reads plainly as one synchronous function.
+    let _ = tokio::task::spawn_blocking(move || write_private(&path, &entry)).await;
 }
 
 /// Write owner-only, creating the directory owner-only too.
@@ -267,6 +290,17 @@ mod tests {
         Utc::now()
     }
 
+    /// Drive a future to completion from a synchronous test. The tests that
+    /// touch the environment hold `env_lock` throughout, and a std mutex
+    /// guard must not be held across an `.await`.
+    fn block_on<F: std::future::Future>(f: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a current-thread runtime builds")
+            .block_on(f)
+    }
+
     fn entry(mins: i64) -> Entry {
         Entry {
             access_key_id: "AKIAEXAMPLE".into(),
@@ -339,13 +373,31 @@ mod tests {
     }
 
     #[test]
+    fn debug_output_never_contains_the_secret_or_the_token() {
+        let e = Entry {
+            access_key_id: "AKIDSENTINEL".into(),
+            secret_access_key: "secret-sentinel-value".into(),
+            session_token: Some("token-sentinel-value".into()),
+            expires_at: None,
+        };
+        let shown = format!("{e:?}");
+        assert!(!shown.contains("secret-sentinel-value"), "{shown}");
+        assert!(!shown.contains("token-sentinel-value"), "{shown}");
+        // Still useful for debugging: which key, and when it lapses.
+        assert!(shown.contains("AKIDSENTINEL"), "{shown}");
+        assert!(shown.contains("expires_at"), "{shown}");
+        let pretty = format!("{e:#?}");
+        assert!(!pretty.contains("secret-sentinel-value"), "{pretty}");
+    }
+
+    #[test]
     fn ambient_environment_credentials_bypass_the_cache() {
         // Environment credentials override profile configuration, so a
         // profile-keyed entry would describe a principal that is not in use.
         let _guard = env_lock();
         let prev = std::env::var("AWS_ACCESS_KEY_ID").ok();
         unsafe { std::env::set_var("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE") };
-        assert!(load(&key("prod"), now()).is_none());
+        assert!(block_on(load(&key("prod"), now())).is_none());
         unsafe {
             match prev {
                 Some(v) => std::env::set_var("AWS_ACCESS_KEY_ID", v),
@@ -411,7 +463,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
 
         // A profile that was never cached simply misses.
-        assert!(load(&key("profile-that-was-never-cached-xyz"), now()).is_none());
+        assert!(block_on(load(&key("profile-that-was-never-cached-xyz"), now())).is_none());
     }
 
     #[test]

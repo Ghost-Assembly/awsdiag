@@ -1,21 +1,51 @@
 //! Rendering an envelope in the three output formats.
 
 use crate::common::envelope::Envelope;
+use crate::common::errors::Error;
 use crate::common::flags::OutputFormat;
 use serde::Serialize;
 use serde_json::Value;
 
-pub fn render<T: Serialize>(env: &Envelope<T>, format: OutputFormat) -> String {
+/// The envelope without its rows: the final NDJSON line.
+///
+/// Rows alone cannot say whether they are the whole answer, so a consumer
+/// reading line by line would take a capped result as complete. The last line
+/// carries `count` and `truncated` the way the JSON envelope does.
+#[derive(Serialize)]
+struct Trailer<'a> {
+    ok: bool,
+    command: &'a str,
+    params: &'a Value,
+    count: usize,
+    truncated: bool,
+    next: Option<&'a str>,
+}
+
+/// Render an envelope.
+///
+/// Fails rather than degrading when something cannot be serialized: an
+/// empty string or a silently skipped row would read as "no data" or as a
+/// complete result, and exit 0.
+pub fn render<T: Serialize>(env: &Envelope<T>, format: OutputFormat) -> Result<String, Error> {
     match format {
-        OutputFormat::Json => serde_json::to_string_pretty(env).unwrap_or_default(),
-        OutputFormat::Ndjson => env
-            .data
-            .iter()
-            .filter_map(|row| serde_json::to_string(row).ok())
-            .collect::<Vec<_>>()
-            .join("\n"),
+        OutputFormat::Json => Ok(serde_json::to_string_pretty(env)?),
+        OutputFormat::Ndjson => {
+            let mut lines = Vec::with_capacity(env.data.len() + 1);
+            for row in &env.data {
+                lines.push(serde_json::to_string(row)?);
+            }
+            lines.push(serde_json::to_string(&Trailer {
+                ok: env.ok,
+                command: &env.command,
+                params: &env.params,
+                count: env.count,
+                truncated: env.truncated,
+                next: env.next.as_deref(),
+            })?);
+            Ok(lines.join("\n"))
+        }
         OutputFormat::Text => {
-            let value = serde_json::to_value(&env.data).unwrap_or(Value::Null);
+            let value = serde_json::to_value(&env.data)?;
             let mut out = table(value.as_array().map(Vec::as_slice).unwrap_or(&[]));
             // Truncation is invisible in a bare table, and a human scanning
             // text output is exactly who would otherwise miss it.
@@ -25,7 +55,7 @@ pub fn render<T: Serialize>(env: &Envelope<T>, format: OutputFormat) -> String {
                     env.count
                 ));
             }
-            out
+            Ok(out)
         }
     }
 }
@@ -164,6 +194,30 @@ mod tests {
         ])
     }
 
+    fn render(env: &Envelope<impl Serialize>, format: OutputFormat) -> String {
+        super::render(env, format).expect("renders")
+    }
+
+    /// A row whose serialization fails, as a map with non-string keys or a
+    /// failing custom `Serialize` impl would.
+    struct Unserializable;
+    impl Serialize for Unserializable {
+        fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+            Err(serde::ser::Error::custom("cannot serialize this row"))
+        }
+    }
+
+    #[test]
+    fn an_unserializable_row_is_an_error_in_every_format() {
+        // It used to become an empty string (json, text) or a silently
+        // skipped line (ndjson) -- either way a wrong answer with exit 0.
+        let e = Envelope::new("whoami", json!({}), vec![Unserializable]);
+        for format in [OutputFormat::Json, OutputFormat::Ndjson, OutputFormat::Text] {
+            let err = super::render(&e, format).expect_err("must not render");
+            assert_eq!(err.kind(), "serialize", "{format:?}");
+        }
+    }
+
     #[test]
     fn json_emits_the_whole_envelope_not_just_the_rows() {
         let out = render(&sample(), OutputFormat::Json);
@@ -174,14 +228,39 @@ mod tests {
     }
 
     #[test]
-    fn ndjson_emits_one_parseable_object_per_row_and_no_envelope() {
+    fn ndjson_emits_one_parseable_object_per_row_then_the_envelope() {
         let out = render(&sample(), OutputFormat::Ndjson);
-        let lines: Vec<&str> = out.lines().collect();
-        assert_eq!(lines.len(), 2);
-        for l in lines {
-            serde_json::from_str::<Value>(l).expect("each line parses alone");
-        }
-        assert!(!out.contains("\"ok\""));
+        let lines: Vec<Value> = out
+            .lines()
+            .map(|l| serde_json::from_str(l).expect("each line parses alone"))
+            .collect();
+        assert_eq!(lines.len(), 3, "two rows and the envelope: {out}");
+        assert_eq!(lines[0]["profile"], json!("gamma-admin"));
+        assert_eq!(lines[1]["profile"], json!("beta-power"));
+        assert!(lines[0].get("ok").is_none(), "rows are bare rows");
+
+        let last = &lines[2];
+        assert_eq!(last["ok"], json!(true));
+        assert_eq!(last["command"], json!("whoami"));
+        assert_eq!(last["count"], json!(2));
+        assert_eq!(last["truncated"], json!(false));
+        assert!(last.get("data").is_none(), "rows are not repeated");
+    }
+
+    #[test]
+    fn ndjson_carries_truncation_on_its_final_line() {
+        // Without it a line-oriented consumer cannot tell a capped result
+        // from a complete one -- the reason the envelope exists.
+        let out = render(
+            &env(vec![Row {
+                profile: "a",
+                account: "b",
+            }])
+            .truncated(true),
+            OutputFormat::Ndjson,
+        );
+        let last: Value = serde_json::from_str(out.lines().last().unwrap()).unwrap();
+        assert_eq!(last["truncated"], json!(true));
     }
 
     #[test]
@@ -217,7 +296,13 @@ mod tests {
     fn empty_results_render_without_panicking_in_every_format() {
         let e = env(vec![]);
         assert_eq!(render(&e, OutputFormat::Text), "");
-        assert_eq!(render(&e, OutputFormat::Ndjson), "");
+        // Only the envelope line: an empty result still says it is complete.
+        let nd = render(&e, OutputFormat::Ndjson);
+        assert_eq!(nd.lines().count(), 1, "{nd}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&nd).unwrap()["count"],
+            json!(0)
+        );
         assert_eq!(
             serde_json::from_str::<Value>(&render(&e, OutputFormat::Json)).unwrap()["count"],
             json!(0)
