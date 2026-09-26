@@ -5,8 +5,9 @@
 [![coverage](https://sonarcloud.io/api/project_badges/measure?project=Ghost-Assembly_awsdiag&metric=coverage)](https://sonarcloud.io/summary/new_code?id=Ghost-Assembly_awsdiag)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Fast, compact AWS diagnostic data acquisition — built to be driven by an AI
-agent during troubleshooting, and usable by hand.
+Fast, compact AWS diagnostic data collection, built to be driven by an AI
+agent and rendered into a single self-contained HTML report — and usable by
+hand.
 
 It acquires and *shapes* data. It does not analyze. The caller reasons over
 the output and writes the report; `awsdiag report` renders that report into a
@@ -15,7 +16,7 @@ single self-contained HTML file.
 ## Why
 
 Driving `aws` CLI + `jq` through an agent is slow, inconsistent between runs,
-and expensive in tokens. `awsdiag` addresses three specific costs:
+and expensive in tokens. `awsdiag` addresses four specific costs:
 
 - **Process startup.** `aws --version` measures ~211 ms; `awsdiag --version`
   measures ~1 ms.
@@ -44,6 +45,27 @@ supported. Windows is not currently a build target — the credential cache
 uses Unix file modes.
 
 ## Install
+
+Prebuilt binaries are attached to each
+[release](https://github.com/Ghost-Assembly/awsdiag/releases): a Linux
+tarball (`x86_64-unknown-linux-gnu`) and a macOS tarball
+(`aarch64-apple-darwin`), each with a `.sha256` alongside it. Download,
+verify, and install to `~/.local/bin`:
+
+```bash
+version=v0.1.0
+target=x86_64-unknown-linux-gnu   # or aarch64-apple-darwin on Apple Silicon
+base="https://github.com/Ghost-Assembly/awsdiag/releases/download/${version}"
+
+curl -LO "${base}/awsdiag-${target}.tar.gz"
+curl -LO "${base}/awsdiag-${target}.tar.gz.sha256"
+sha256sum -c "awsdiag-${target}.tar.gz.sha256"   # macOS: shasum -a 256 -c
+
+mkdir -p ~/.local/bin
+tar -xzf "awsdiag-${target}.tar.gz" -C ~/.local/bin
+```
+
+Or build from source:
 
 ```bash
 mise install          # pinned Rust toolchain
@@ -87,6 +109,12 @@ Every subcommand emits the same envelope:
   as the final line, so `count` and `truncated` survive streaming. A failure
   is the error envelope on a single line.
 
+A streaming consumer tells the trailing envelope from a data row by `ok`: it
+is the only line that carries the field. Filter it out to get rows only —
+`jq -c 'select(has("ok") | not)'` — and read the last line for status and
+truncation. An empty result is still exactly one line: the envelope alone,
+with `count: 0`.
+
 ## Common flags
 
 ```
@@ -94,11 +122,19 @@ Every subcommand emits the same envelope:
 --profiles '<glob>'     select profiles, e.g. '*-power'; whoami queries every
                         match in parallel, other commands use the first match
 --region <region>       override the profile's region
---since / --until       2h | 30m | 7d | 2026-09-04T10:00:00Z | 2026-09-04 | 10:35
 --output json|ndjson|text
 --limit <n>
 ```
 
+`--since` / `--until` are only on the commands that query over a time
+window — `logs scan|drill|tail` and `metrics compare|top` — not on `whoami`,
+`ec2`, or `cache`. They accept:
+
+```
+2h | 30m | 7d | 2026-09-04T10:00:00Z | 2026-09-04 | 10:35
+```
+
+A date or clock time with no offset is read as **UTC**, not the local zone.
 A bare clock time that has not happened yet today resolves to yesterday, so
 `--since 10:35` always means the 10:35 that already passed.
 
@@ -171,8 +207,13 @@ is what you want interactively.
 
 Resolved credentials are cached at `$XDG_STATE_HOME/awsdiag/creds`
 (default `~/.local/state/awsdiag/creds`), directory `0700`, files `0600`,
-keyed by a hash of the profile name. This is the same class of short-lived
-material the AWS CLI already caches in `~/.aws/cli/cache/`.
+keyed by a hash of the config file path, the profile name, **and the
+profile's own section** — not the profile name alone. The name alone says
+nothing about which principal a profile resolves to, so a profile re-pointed
+at a different role, or two config files that both define the same profile
+name for different accounts, get separate entries rather than colliding.
+This is the same class of short-lived material the AWS CLI already caches in
+`~/.aws/cli/cache/`.
 
 Entries are refused within 120 s of expiry, and any unreadable or corrupt
 entry is treated as a miss rather than an error — the cache must never be why
@@ -209,7 +250,12 @@ on `scan`, `drill` and `tail` alike; give `drill` the value the scan used.
 The baseline fetch is bounded by `--limit`, or by 50,000 events without one;
 a capped baseline undercounts, so hitting either sets `truncated`.
 
-### metrics
+Add `--no-cluster` to `scan` to get raw events back instead of clusters, and
+`--stream` to `drill` to narrow to a single host.
+
+## metrics
+
+### metrics compare
 
 ```bash
 awsdiag metrics compare --profile p --since 6h \
@@ -227,7 +273,7 @@ ts                    CPUUtilization i-aaa  CPUUtilization i-bbb
 2026-09-04T10:01:00Z  91.2                  -
 ```
 
-Two details that are easy to get wrong by hand:
+Three details that are easy to get wrong by hand:
 
 - **A gap is `null`, never `0`.** A missing datapoint means the resource was
   not reporting; rendering it as zero reads as healthy, which is the opposite
@@ -236,7 +282,6 @@ Two details that are easy to get wrong by hand:
   days, 5-minute for 63, 1-hour for 455. Asking for finer data than is
   retained returns an *empty result*, indistinguishable from a flat metric.
   `--period` overrides when you want a specific resolution.
-
 - **Sparse results are explained.** A metric published every 5 minutes queried
   at 60s returns a matrix that is 80% empty — which reads as an outage. The
   reported `native_period_seconds` and `note` say what the metric's real
@@ -284,10 +329,14 @@ of it.
 every tag — plus whether **detailed monitoring** is on, which decides the
 finest resolution `metrics compare` can return for it.
 
-`health` combines status checks with **scheduled events**, and sorts anything
-not `ok` to the top. Scheduled events are included because an instance can
-pass every status check and still be scheduled for a stop tonight, which is
-precisely what a status check alone hides.
+`health` combines status checks with **scheduled events**, and sorts any
+*running* instance that is not `ok` to the top. Scheduled events are included
+because an instance can pass every status check and still be scheduled for a
+stop tonight, which is precisely what a status check alone hides. A stopped,
+stopping, shutting-down or terminated instance is never treated as
+concerning — AWS reports `not-applicable` for its status checks, and
+counting that as a failure would bury a genuinely impaired host under every
+instance you deliberately powered off.
 
 ## A known limitation
 
@@ -304,8 +353,7 @@ wrong-but-tidy, so clustering stays conservative for now.
 must satisfy.
 
 `cluster_id` is a hash of the template and is stable across runs, so
-`logs drill --cluster <id>` returns the verbatim lines behind it. Add
-`--stream` to narrow to one host, or `--no-cluster` to skip clustering.
+`logs drill --cluster <id>` returns the verbatim lines behind it.
 
 ### Reading truncation on a scan
 
@@ -319,18 +367,23 @@ was not fully covered. Narrow `--since` or raise `--limit` when you see it.
 
 Working: shared plumbing and credential cache, `whoami`, `cache`, `logs`
 (groups, scan, drill, tail) with clustering and baseline classification,
-`metrics` (get, compare, top), `ec2` (ls, show, health), and `report`.
+`metrics` (compare, top), `ec2` (ls, show, health), and `report`.
 
 Planned: in-guest collection over SSM (`host`), and the remaining services —
 `ebs`, `elb`, `lambda`, `apigw`, `fsx`, `s3`, `route53`, `trail`.
 
 ## Tasks
 
-`just setup | fmt | lint | test | security | build | run | clean | ci`
+`just setup | fmt | lint | test | test-browser | security | coverage |
+sonar-reports | build | run | clean | ci | ci-full`
 
-`just ci` is what CI runs. Run it before pushing. `just security` runs
-`cargo audit`, `cargo deny check`, `gitleaks`, `actionlint` and `zizmor`.
-`just coverage` produces a browsable HTML coverage report.
+`ci` (fmt check, clippy, tests, security, release build) is the required
+status check; run it before pushing. `test-browser` runs separately in CI
+as its own cached step, since it downloads ~250 MB of browsers — `ci-full`
+runs both. `just security` runs `cargo audit`, `cargo deny check`,
+`gitleaks`, `actionlint` and `zizmor`. `just coverage` produces a browsable
+HTML coverage report; `just sonar-reports` produces the two reports
+SonarQube Cloud consumes.
 
 ## Credits
 
