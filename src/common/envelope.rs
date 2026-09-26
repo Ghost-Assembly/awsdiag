@@ -20,7 +20,9 @@ pub struct Envelope<T: Serialize> {
     pub params: Value,
     pub count: usize,
     pub truncated: bool,
-    /// Pagination token to resume from, when more data exists upstream.
+    /// Reserved for a resume token. No command can resume a partial result
+    /// yet, so this is always `null`; `truncated` is what says data is
+    /// missing.
     pub next: Option<String>,
     pub data: Vec<T>,
 }
@@ -42,17 +44,6 @@ impl<T: Serialize> Envelope<T> {
     /// page boundary was left unread.
     pub fn truncated(mut self, truncated: bool) -> Self {
         self.truncated = truncated;
-        self
-    }
-
-    /// Attach a resume token. Setting one implies the result is incomplete,
-    /// so `truncated` follows automatically rather than relying on both being
-    /// remembered at every call site.
-    pub fn next(mut self, next: Option<String>) -> Self {
-        if next.is_some() {
-            self.truncated = true;
-        }
-        self.next = next;
         self
     }
 }
@@ -102,23 +93,6 @@ mod tests {
         let e = env(vec!["a"]);
         assert!(e.ok);
         assert!(!e.truncated);
-        assert!(e.next.is_none());
-    }
-
-    #[test]
-    fn a_resume_token_implies_truncation() {
-        // Setting `next` without `truncated` would understate the loss, so the
-        // builder couples them rather than trusting every call site to do it.
-        let e = env(vec!["a"]).next(Some("tok-123".into()));
-        assert!(e.truncated);
-        assert_eq!(e.next.as_deref(), Some("tok-123"));
-    }
-
-    #[test]
-    fn truncation_survives_a_later_none_token() {
-        // Hitting a --limit truncates with no token to resume from.
-        let e = env(vec!["a"]).truncated(true).next(None);
-        assert!(e.truncated);
         assert!(e.next.is_none());
     }
 
