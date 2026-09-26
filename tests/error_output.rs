@@ -117,3 +117,22 @@ fn an_unacceptable_period_is_a_bad_argument_before_any_call() {
         );
     }
 }
+
+#[test]
+fn ec2_show_without_instance_or_name_is_a_bad_argument_with_no_series_hint() {
+    // This used to be `BadSpec`, whose hint describes the `--series` format --
+    // nonsensical advice for a command that has no such flag.
+    let args = ["ec2", "show", "--profile", "definitely-not-a-real-profile"];
+    let r = run(&args);
+    assert!(!r.ok);
+    let v: serde_json::Value = serde_json::from_str(r.stdout.trim()).expect("envelope parses");
+    assert_eq!(v["kind"], serde_json::json!("bad_argument"));
+    assert!(v["hint"].is_null(), "no --series hint here: {v}");
+    assert!(
+        v["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("--instance"),
+        "{v}"
+    );
+}

@@ -359,10 +359,7 @@ pub async fn top(
     )
     .await?;
     if values.is_empty() {
-        return Err(Error::BadSpec {
-            spec: format!("{namespace}/{metric}"),
-            reason: format!("no metrics found with dimension {dimension}"),
-        });
+        return Err(no_metrics_error(namespace, metric, dimension));
     }
 
     let specs: Vec<SeriesSpec> = values
@@ -448,6 +445,16 @@ fn admit(values: &mut std::collections::BTreeSet<String>, value: &str) -> bool {
     }
     values.insert(value.to_string());
     true
+}
+
+/// Built as its own function so the fix from `BadSpec` to `BadArgument` --
+/// which stops this from carrying the unrelated `--series` hint -- is
+/// testable without an AWS call.
+fn no_metrics_error(namespace: &str, metric: &str, dimension: &str) -> Error {
+    Error::BadArgument {
+        what: format!("{namespace}/{metric} --dimension {dimension}"),
+        reason: "no metrics found with that dimension".into(),
+    }
 }
 
 /// Distinct values of one dimension for a metric, via ListMetrics.
@@ -787,6 +794,18 @@ mod tests {
             assert_eq!(e.kind(), "bad_argument", "{bad}");
             assert!(e.to_string().contains("--period"), "{bad}: {e}");
         }
+    }
+
+    #[test]
+    fn no_metrics_found_is_a_bad_argument_with_no_series_hint() {
+        // This used to be `BadSpec`, whose hint explains the `--series`
+        // format -- unrelated advice for `metrics top`, which has no such
+        // flag.
+        let e = no_metrics_error("AWS/EC2", "CPUUtilization", "InstanceId");
+        assert_eq!(e.kind(), "bad_argument");
+        assert!(e.hint().is_none(), "{e:?}");
+        assert!(e.to_string().contains("AWS/EC2/CPUUtilization"));
+        assert!(e.to_string().contains("InstanceId"));
     }
 
     #[test]

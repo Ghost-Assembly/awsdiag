@@ -285,8 +285,8 @@ pub async fn show(
     progress: &Progress,
 ) -> Result<Envelope<InstanceDetail>, Error> {
     if instances.is_empty() && name.is_none() {
-        return Err(Error::BadSpec {
-            spec: String::new(),
+        return Err(Error::BadArgument {
+            what: "--instance/--name".into(),
             reason: "give --instance or --name; showing every instance is what `ls` is for".into(),
         });
     }
