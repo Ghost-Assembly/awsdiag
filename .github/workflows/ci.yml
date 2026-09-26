@@ -24,6 +24,10 @@ jobs:
           # Do not leave the token in .git/config for later steps. Nothing
           # here pushes, so there is no reason to keep it around.
           persist-credentials: false
+          # Full history: `just security` runs gitleaks over every commit,
+          # and a shallow clone would hand it only the tip -- a secret
+          # committed and later removed would never be seen.
+          fetch-depth: 0
 
       - name: Install pinned toolchain
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0

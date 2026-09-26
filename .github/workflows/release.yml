@@ -12,8 +12,41 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The same gate a pull request passes. A tag can be pushed from any commit,
+  # including one that never went through CI, so the release re-proves it
+  # rather than trusting that it did.
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # gitleaks in `just security` scans the full history.
+          fetch-depth: 0
+
+      - name: Install pinned toolchain
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          # No cache anywhere on the release path; see the build job.
+          cache: false
+
+      - name: setup
+        run: just setup
+
+      # Same pins as ci.yml.
+      - name: Install security tooling
+        run: |
+          cargo install cargo-audit --version 0.22.2 --locked
+          cargo install cargo-deny  --version 0.20.2 --locked
+
+      - name: ci
+        run: just ci
+
   build:
     name: build (${{ matrix.target }})
+    needs: test
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
