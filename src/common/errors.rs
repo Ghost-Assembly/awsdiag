@@ -33,6 +33,12 @@ pub enum Error {
     #[error("cannot parse {spec:?}: {reason}")]
     BadSpec { spec: String, reason: String },
 
+    /// A flag value that is well-formed text but not an acceptable value,
+    /// such as an uncompilable glob or a period CloudWatch would reject.
+    /// Distinct from `BadSpec`, whose hint describes the `--series` format.
+    #[error("invalid {what}: {reason}")]
+    BadArgument { what: String, reason: String },
+
     #[error("{source_name} is not a valid findings document: {detail}")]
     BadFindings { source_name: String, detail: String },
 
@@ -48,6 +54,11 @@ pub enum Error {
 
     #[error(transparent)]
     Io(#[from] std::io::Error),
+
+    /// A result that could not be rendered. Surfaced rather than printed as
+    /// an empty string, which would read as "no data" and exit 0.
+    #[error("cannot serialize output: {0}")]
+    Serialize(#[from] serde_json::Error),
 }
 
 impl Error {
@@ -55,13 +66,17 @@ impl Error {
     /// than pattern-matching the human message, which is free to change.
     pub fn kind(&self) -> &'static str {
         match self {
-            Error::Time(_) | Error::InvertedWindow { .. } | Error::BadSpec { .. } => "bad_argument",
+            Error::Time(_)
+            | Error::InvertedWindow { .. }
+            | Error::BadSpec { .. }
+            | Error::BadArgument { .. } => "bad_argument",
             Error::BadFindings { .. } => "bad_findings",
             Error::Auth { .. } => "auth",
             Error::AccessDenied { .. } => "access_denied",
             Error::NoProfileMatch { .. } => "no_profile_match",
             Error::Aws { .. } => "aws",
             Error::File { .. } | Error::Io(_) => "io",
+            Error::Serialize(_) => "serialize",
         }
     }
 
@@ -86,11 +101,11 @@ impl Error {
             Error::NoProfileMatch { .. } => {
                 Some("list configured profiles with `aws configure list-profiles`".into())
             }
-            // A malformed --series spec is worth a worked example: the format
-            // is not guessable from the error text alone.
             Error::BadFindings { .. } => {
                 Some("print the expected shape with `awsdiag report --schema`".into())
             }
+            // A malformed --series spec is worth a worked example: the format
+            // is not guessable from the error text alone.
             Error::BadSpec { .. } => Some(
                 "series format is Namespace/MetricName[:Stat][,Dim=Value...], \
                  e.g. AWS/EC2/CPUUtilization:Average,InstanceId=i-0abc"
@@ -99,9 +114,12 @@ impl Error {
             Error::File { .. } => {
                 Some("check the path exists and that the parent directory is writable".into())
             }
-            Error::Time(_) | Error::InvertedWindow { .. } | Error::Aws { .. } | Error::Io(_) => {
-                None
-            }
+            Error::Time(_)
+            | Error::InvertedWindow { .. }
+            | Error::BadArgument { .. }
+            | Error::Aws { .. }
+            | Error::Io(_)
+            | Error::Serialize(_) => None,
         }
     }
 }
@@ -170,6 +188,19 @@ mod tests {
             .is_none()
         );
         assert!(Error::Time(TimeError::Empty).hint().is_none());
+    }
+
+    #[test]
+    fn a_bad_argument_is_not_given_the_series_format_hint() {
+        // BadSpec's hint explains `--series`; reusing it for an unrelated
+        // flag would send the caller to fix the wrong thing.
+        let e = Error::BadArgument {
+            what: "--period".into(),
+            reason: "must be a multiple of 60".into(),
+        };
+        assert_eq!(e.kind(), "bad_argument");
+        assert!(e.to_string().contains("--period"));
+        assert!(e.hint().is_none());
     }
 
     #[test]
