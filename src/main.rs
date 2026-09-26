@@ -21,7 +21,9 @@ use serde_json::json;
 #[command(
     name = "awsdiag",
     version,
-    about = "Fast, compact AWS diagnostic data acquisition",
+    about = "Fast, compact AWS diagnostic data collection, built to be driven \
+             by an AI agent and rendered into a single self-contained HTML \
+             report",
     long_about = "Acquires and shapes AWS diagnostic data for analysis.\n\n\
                   Every subcommand emits the same JSON envelope:\n  \
                   {ok, command, params, count, truncated, next, data}\n\n\
