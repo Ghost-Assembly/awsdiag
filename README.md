@@ -81,13 +81,18 @@ Every subcommand emits the same envelope:
 - `count` is always derived from `data`, so it cannot disagree with it.
 - Failures use the same shape with `ok: false`, a stable `kind`, and a `hint`
   naming the command that fixes it. The error envelope goes to **stdout** so
-  it stays pipeable to `jq`; a human-readable summary goes to stderr.
+  it stays pipeable to `jq`; a human-readable summary goes to stderr. With
+  `--output text` only the stderr summary is written.
+- `--output ndjson` writes one row per line, then the envelope without `data`
+  as the final line, so `count` and `truncated` survive streaming. A failure
+  is the error envelope on a single line.
 
 ## Common flags
 
 ```
 --profile <name>        a single profile from ~/.aws/config
---profiles '<glob>'     fan out across profiles, e.g. '*-power'
+--profiles '<glob>'     select profiles, e.g. '*-power'; whoami queries every
+                        match in parallel, other commands use the first match
 --region <region>       override the profile's region
 --since / --until       2h | 30m | 7d | 2026-09-04T10:00:00Z | 2026-09-04 | 10:35
 --output json|ndjson|text
@@ -198,6 +203,11 @@ Each cluster carries the three fields that do the diagnostic work:
 - `by_stream` — *where*. "Everywhere, or one host?" is often the whole answer.
 - `status` — with `--baseline`, each cluster is `new`, `spiking` or `steady`.
   What is new since the preceding period is usually the thing that broke.
+
+A glob `--group` fans out to at most `--max-groups` log groups (default 20)
+on `scan`, `drill` and `tail` alike; give `drill` the value the scan used.
+The baseline fetch is bounded by `--limit`, or by 50,000 events without one;
+a capped baseline undercounts, so hitting either sets `truncated`.
 
 ### metrics
 
