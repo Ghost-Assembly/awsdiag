@@ -27,7 +27,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install pinned toolchain
-        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
         with:
           # No cache anywhere on the release path; see the build job.
           cache: false
@@ -64,7 +64,7 @@ jobs:
           persist-credentials: false
 
       - name: Install pinned toolchain
-        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
         with:
           # No cache on the release path. A cache entry written by an earlier
           # workflow run could otherwise reach the binary that gets published,
